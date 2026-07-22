@@ -69,6 +69,11 @@ config RISCV_VIRT
     select ACPI
     select ACPI_PCI
 
+config QUARD_STAR
+    bool
+    select SERIAL
+
+    
 config SHAKTI_C
     bool
     default y
