@@ -72,6 +72,9 @@ config RISCV_VIRT
 config QUARD_STAR
     bool
     select SERIAL
+    select RISCV_ACLINT
+    select SIFIVE_PLIC
+    select PFLASH_CFI01
 
     
 config SHAKTI_C
