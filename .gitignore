@@ -1,0 +1,5 @@
+# 编译产物
+output/
+
+# QEMU 构建目录
+qemu-10.2.4/build/
