@@ -1,6 +1,8 @@
 set -e
 SHELL_FOLDER=$(cd "$(dirname "$0")";pwd)
+CROSS_PREFIX=/opt/riscv64-lp64d--glibc--stable-2025.08-1/bin/riscv64-linux
 
+# 编译qemu
 cd "$SHELL_FOLDER/qemu-10.2.4"
 if [ ! -f "build/config-host.mak" ]; then
     ./configure --prefix="$SHELL_FOLDER/output/qemu" --target-list=riscv64-softmmu --enable-gtk --enable-virtfs --disable-gio
@@ -9,8 +11,8 @@ make -j$(nproc)
 make install
 cd "$SHELL_FOLDER"
 
-CROSS_PREFIX=/opt/riscv64-lp64d--glibc--stable-2025.08-1/bin/riscv64-linux
 
+# 编译lowlevelboot
 # 创建固件输出目录 用于存放生成的目标文件、ELF、BIN
 if [ ! -d "$SHELL_FOLDER/output/lowlevelboot" ]; then  
 mkdir $SHELL_FOLDER/output/lowlevelboot
@@ -21,8 +23,28 @@ $CROSS_PREFIX-gcc -x assembler-with-cpp -c startup.s -o $SHELL_FOLDER/output/low
 $CROSS_PREFIX-gcc -nostartfiles -T./boot.lds -Wl,-Map=$SHELL_FOLDER/output/lowlevelboot/lowlevel_fw.map -Wl,--gc-sections $SHELL_FOLDER/output/lowlevelboot/startup.o -o $SHELL_FOLDER/output/lowlevelboot/lowlevel_fw.elf
 $CROSS_PREFIX-objcopy -O binary -S $SHELL_FOLDER/output/lowlevelboot/lowlevel_fw.elf $SHELL_FOLDER/output/lowlevelboot/lowlevel_fw.bin
 $CROSS_PREFIX-objdump --source --demangle --disassemble --reloc --wide $SHELL_FOLDER/output/lowlevelboot/lowlevel_fw.elf > $SHELL_FOLDER/output/lowlevelboot/lowlevel_fw.lst
-cd $SHELL_FOLDER/output/lowlevelboot
+
+# 编译opensbi
+if [ ! -d "$SHELL_FOLDER/output/opensbi" ]; then  
+mkdir $SHELL_FOLDER/output/opensbi
+fi  
+cd $SHELL_FOLDER/opensbi
+make CROSS_COMPILE=$CROSS_PREFIX- PLATFORM=quard_star FW_TEXT_START=0x80000000 FW_JUMP_ADDR=0x80200000 FW_JUMP_FDT_ADDR=0x82200000
+cp -r $SHELL_FOLDER/opensbi/build/platform/quard_star/firmware/*.bin $SHELL_FOLDER/output/opensbi/
+
+# 生成sbi.dtb
+cd $SHELL_FOLDER/dts
+dtc -I dts -O dtb -o $SHELL_FOLDER/output/opensbi/quard_star_sbi.dtb quard_star_sbi.dts
+
+# 合成firmware固件
+if [ ! -d "$SHELL_FOLDER/output/fw" ]; then  
+mkdir $SHELL_FOLDER/output/fw
+fi  
+cd $SHELL_FOLDER/output/fw
+
 rm -rf fw.bin
 dd of=fw.bin bs=1k count=32k if=/dev/zero
-dd of=fw.bin bs=1k conv=notrunc seek=0 if=lowlevel_fw.bin
+dd of=fw.bin bs=1k conv=notrunc seek=0 if=$SHELL_FOLDER/output/lowlevelboot/lowlevel_fw.bin
+dd of=fw.bin bs=1k conv=notrunc seek=512 if=$SHELL_FOLDER/output/opensbi/quard_star_sbi.dtb
+dd of=fw.bin bs=1k conv=notrunc seek=2K if=$SHELL_FOLDER/output/opensbi/fw_jump.bin
 cd $SHELL_FOLDER

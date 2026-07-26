@@ -1,0 +1,282 @@
+/dts-v1/;
+
+/* 定义根节点 */
+/ {
+    #address-cells = <0x2>; /* 决定了 reg 属性中“地址”使用几个 32 位的单元 */
+    #size-cells = <0x2>; /* reg 属性中“大小”使用几个 32 位的单元 */
+    compatible = "riscv-quard-star";
+    model = "riscv-quard-star,qemu";
+
+    /* 定义chosen子节点，用于传递输入参数 */   
+	chosen {
+		stdout-path = "/soc/uart0@10000000";  /* 定义系统标准输出stdout使用节点/soc/uart0@10000000 */
+	};
+
+    /* 定义memory子节点，用于定义系统主内存 */   
+	memory@80000000 {
+		device_type = "memory";    /* 设备类型 */
+		reg = <0x0 0x80000000 0x0 0x40000000>;  /* 地址和大小定义，注意是64位的 */
+	};
+
+    /* 定义cpus子节点，用于定义系统核心信息 */ 
+    cpus {
+        #address-cells = <0x1>; /* 节点中的reg的地址宽度为32位 */
+		#size-cells = <0x0>; /* 节点中的reg没有大小*/
+
+        /* CPU 主频（如 1.2 GHz）是指 CPU 核心执行指令的速度，通常远高于定时器基准频率。
+         * timebase-frequency 是一个独立且相对较低的固定频率，主要用于操作系统进行时间管理，
+         * 比如计算时间片、系统 jiffies 等
+         */
+		timebase-frequency = <0x989680>; /*自定义的属性 即 10 MHz */
+
+        cpu0: cpu@0 {             /* 定义cpu0子节点 */   
+			phandle = <0xf>;      /* 其他具体的属性在驱动代码内针对使用 */
+			device_type = "cpu";
+            /* reg 属性是设备树中用于定义设备地址空间的标准属性。
+             * 对于 CPU 节点，它的值（<0x0>）表示该 CPU 核心的硬件 ID。 
+             */
+			reg = <0x0>;
+			status = "okay";      /* status属性用来表示启用该设备 */   
+			compatible = "riscv";
+			riscv,isa = "rv64imafdcsu";
+			mmu-type = "riscv,sv48";
+
+			interrupt-controller { /* 定义中断控制器子节点 */   
+				#interrupt-cells = <0x1>;
+				interrupt-controller;
+				compatible = "riscv,cpu-intc";
+				phandle = <0x10>; 
+                /* 为该节点分配一个唯一的数字句柄，
+                 * 以便其他节点（如 plic 或 clint）在 interrupts-extended 属性中引用它。 
+                 */
+			};
+		};
+
+        cpu1: cpu@1 {             /* 定义cpu1子节点 */   
+			phandle = <0xd>;      /* 其他具体的属性在驱动代码内针对使用 */
+			device_type = "cpu";
+            /* reg 属性是设备树中用于定义设备地址空间的标准属性。
+             * 对于 CPU 节点，它的值（<0x0>）表示该 CPU 核心的硬件 ID。 
+             */
+			reg = <0x1>;
+			status = "okay";      /* status属性用来表示启用该设备 */   
+			compatible = "riscv";
+			riscv,isa = "rv64imafdcsu";
+			mmu-type = "riscv,sv48";
+
+			interrupt-controller { /* 定义中断控制器子节点 */   
+				#interrupt-cells = <0x1>;
+				interrupt-controller;
+				compatible = "riscv,cpu-intc";
+				phandle = <0xe>; 
+			};
+		};
+
+        cpu2: cpu@2 {             
+			phandle = <0xb>;      
+			device_type = "cpu";
+			reg = <0x2>;
+			status = "okay";      
+			compatible = "riscv";
+			riscv,isa = "rv64imafdcsu";
+			mmu-type = "riscv,sv48";
+
+			interrupt-controller { 
+				#interrupt-cells = <0x1>;
+				interrupt-controller;
+				compatible = "riscv,cpu-intc";
+				phandle = <0xc>; 
+			};
+		};
+
+        cpu3: cpu@3 {
+			phandle = <0x9>;
+			device_type = "cpu";
+			reg = <0x3>;
+			status = "okay";
+			compatible = "riscv";
+			riscv,isa = "rv64imafdcsu";
+			mmu-type = "riscv,sv48";
+
+			interrupt-controller {
+				#interrupt-cells = <0x1>;
+				interrupt-controller;
+				compatible = "riscv,cpu-intc";
+				phandle = <0xa>;
+			};
+		};
+
+        cpu4: cpu@4 {
+			phandle = <0x7>;
+			device_type = "cpu";
+			reg = <0x4>;
+			status = "okay";
+			compatible = "riscv";
+			riscv,isa = "rv64imafdcsu";
+			mmu-type = "riscv,sv48";
+
+			interrupt-controller {
+				#interrupt-cells = <0x1>;
+				interrupt-controller;
+				compatible = "riscv,cpu-intc";
+				phandle = <0x8>;
+			};
+		};
+
+        cpu5: cpu@5 {
+			phandle = <0x5>;
+			device_type = "cpu";
+			reg = <0x5>;
+			status = "okay";
+			compatible = "riscv";
+			riscv,isa = "rv64imafdcsu";
+			mmu-type = "riscv,sv48";
+
+			interrupt-controller {
+				#interrupt-cells = <0x1>;
+				interrupt-controller;
+				compatible = "riscv,cpu-intc";
+				phandle = <0x6>;
+			};
+		};
+
+        cpu6: cpu@6 {
+			phandle = <0x3>;
+			device_type = "cpu";
+			reg = <0x6>;
+			status = "okay";
+			compatible = "riscv";
+			riscv,isa = "rv64imafdcsu";
+			mmu-type = "riscv,sv48";
+
+			interrupt-controller {
+				#interrupt-cells = <0x1>;
+				interrupt-controller;
+				compatible = "riscv,cpu-intc";
+				phandle = <0x4>;
+			};
+		};
+
+		cpu7: cpu@7 {
+			phandle = <0x1>;
+			device_type = "cpu";
+			reg = <0x7>;
+			status = "okay";
+			compatible = "riscv";
+			riscv,isa = "rv64imafdcsu";
+			mmu-type = "riscv,sv48";
+
+			interrupt-controller {
+				#interrupt-cells = <0x1>;
+				interrupt-controller;
+				compatible = "riscv,cpu-intc";
+				phandle = <0x2>;
+			};
+		};
+
+        /* 用于描述 CPU 核心的物理拓扑结构的标准方式。
+        * 它明确地将 8 个 CPU 核心组织成一个单簇（Cluster0），
+        * 并定义了每个核心在簇内的编号 
+        */
+        cpu-map {
+
+			cluster0 {
+
+				core0 {
+					cpu = <0xf>;
+				};
+
+				core1 {
+					cpu = <0xd>;
+				};
+
+				core2 {
+					cpu = <0xb>;
+				};
+
+				core3 {
+					cpu = <0x9>;
+				};
+
+				core4 {
+					cpu = <0x7>;
+				};
+
+				core5 {
+					cpu = <0x5>;
+				};
+
+				core6 {
+					cpu = <0x3>;
+				};
+
+				core7 {
+					cpu = <0x1>;
+				};
+			};
+		};
+    };
+
+    /* 定义soc子节点，用于定义系统内外设信息 */ 
+    soc {
+        #address-cells = <0x2>; /* 节点中的reg的地址宽度为64位 */
+		#size-cells = <0x2>;    /* 节点中的reg的大小宽度为64位 */
+		compatible = "simple-bus";
+		ranges;  /* 子节点地址空间和父地址空间的映射计算方式，这里为空是直接映射的 */
+
+        /* uart信息和中断控制器信息，
+         * soc目前只有这两种外设
+         * 用于设备驱动的具体的设备属性
+         * 需要结合驱动源码确认属性如何使用 
+        */
+        uart0: uart0@10000000 {
+			interrupts = <0xa>; /* 该设备连接到 PLIC 的中断号 10（0xa 是十六进制）由QEMU 模拟硬件定义 */
+			interrupt-parent = <0x11>; /* 通过引用指向中断控制器节点的ID，声明串口产生的中断是发给 PLIC 中断控制器的 */
+			clock-frequency = <0x384000>;
+			reg = <0x0 0x10000000 0x0 0x100>;
+			compatible = "ns16550a";
+		};
+
+        uart1: uart1@10001000 {
+			interrupts = <0xa>;
+			interrupt-parent = <0x11>;
+			clock-frequency = <0x384000>;
+			reg = <0x0 0x10001000 0x0 0x100>;
+			compatible = "ns16550a";
+		};
+
+        uart2: uart2@10002000 {
+			interrupts = <0xa>;
+			interrupt-parent = <0x11>;
+			clock-frequency = <0x384000>;
+			reg = <0x0 0x10002000 0x0 0x100>;
+			compatible = "ns16550a";
+		};
+
+        plic@c000000 {
+			phandle = <0x11>;
+			riscv,ndev = <0x35>; /* 0x35 即十进制的 53，表示支持 53 个外部中断源 */
+			reg = <0x0 0xc000000 0x0 0x210000>;
+            /* 描述了 PLIC 的中断输出如何连接到各个 CPU 核心 
+             * <CPU中断控制器句柄 中断号>。每对都表示一条连接路径
+             * <0x10 0xb>：0x10 是 CPU0 中断控制器的 phandle，0xb（11）表示连接到了 CPU 的 S-Mode（监管模式）外部中断。
+             * <0x10 0x9>：同样连接 CPU0，但 0x9 表示连接到 M-Mode（机器模式）外部中断。
+            */
+			interrupts-extended = <0x10 0xb 0x10 0x9 0xe 0xb 0xe 0x9 0xc 0xb 0xc 0x9 0xa 0xb 0xa 0x9 0x8 0xb 0x8 0x9 0x6 0xb 0x6 0x9 0x4 0xb 0x4 0x9 0x2 0xb 0x2 0x9>;
+			interrupt-controller;
+			compatible = "riscv,plic0";
+			#interrupt-cells = <0x1>;
+			#address-cells = <0x0>;
+		};
+
+        /* CLINT 负责管理每个 CPU 核心私有的、内部产生的中断，主要包括软件中断（IPI）和定时器中断。 */
+        clint@2000000 {
+            /* 0x10 0x7 同样连接 CPU0，0x7 是定时器中断号 */
+            /* 0x10 0x3 同样连接 CPU0，0x3 是软件中断号 */
+			interrupts-extended = <0x10 0x3 0x10 0x7 0xe 0x3 0xe 0x7 0xc 0x3 0xc 0x7 0xa 0x3 0xa 0x7 0x8 0x3 0x8 0x7 0x6 0x3 0x6 0x7 0x4 0x3 0x4 0x7 0x2 0x3 0x2 0x7>;
+			reg = <0x0 0x2000000 0x0 0x10000>;
+			compatible = "riscv,clint0";
+		};
+
+    };
+};

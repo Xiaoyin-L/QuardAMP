@@ -5,13 +5,17 @@
             "includePath": [
                 "${workspaceFolder}/**",
                 "/usr/include/glib-2.0",
-                "/usr/lib/x86_64-linux-gnu/glib-2.0/include"
+                "/usr/lib/x86_64-linux-gnu/glib-2.0/include",
+                "opensbi/sbi_utils/reset/fdt_reset.h"
             ],
             "defines": [],
             "compilerPath": "/usr/bin/gcc",
             "cStandard": "c17",
             "cppStandard": "gnu++17",
-            "intelliSenseMode": "linux-gcc-x64"
+            "intelliSenseMode": "linux-gcc-x64",
+            "compileCommands": [
+                "${workspaceFolder}/qemu-10.2.4/build/compile_commands.json"
+            ]
         }
     ],
     "version": 4
