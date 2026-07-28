@@ -10,6 +10,53 @@
     /* 定义chosen子节点，用于传递输入参数 */   
 	chosen {
 		stdout-path = "/soc/uart0@10000000";  /* 定义系统标准输出stdout使用节点/soc/uart0@10000000 */
+
+		opensbi-domains {
+			compatible = "opensbi,domain,config"; /* 节点名称 */
+
+			tmem: tmem {   /* 定义内存节点 */
+				compatible = "opensbi,domain,memregion";  /* 节点名称 */
+				base = <0x0 0xb0000000>; /* 起始地址注意64位地址哦 */
+				order = <28>; /* 内存大小即size=2^28 */
+			};
+
+			tuart: tuart {  /* 定义mmio节点 */
+				compatible = "opensbi,domain,memregion";  /* 节点名称 */
+				base = <0x0 0x10002000>; /* 起始地址 */
+				order = <8>; /* size=2^8 */
+				mmio;  /* mmio属性 */
+				devices = <&uart2>; /* 关联到设备节点上 */
+			};
+
+			allmem: allmem { /* 定义内存节点，这个节点保护所有地址 */
+				compatible = "opensbi,domain,memregion";
+				base = <0x0 0x0>;
+				order = <64>;
+			};
+
+			tdomain: trusted-domain { /* 定义domain节点 */
+				compatible = "opensbi,domain,instance";  /* 节点名称 */
+				possible-harts = <&cpu7>; /* domain中允许使用的cpu core */
+				/* 给某个 domain 配它能访问哪些内存/MMIO 区域，以及访问权限。 */
+				regions = <&tmem 0x38>, <&tuart 0x18>;/* OpenSBI权限位: bit[3:5]为S/U读写执行权限 */
+				boot-hart = <&cpu7>; /* domain中用于boot的core */
+				next-arg1 = <0x0 0x00000000>; /* 下级程序的参数 */
+				next-addr = <0x0 0xb0000000>; /* 下级程序的起始地址 */
+				next-mode = <0x0>; /* 下级程序的允许模式 0为U模式，1为S模式 */
+				system-reset-allowed; /* 允许复位 */
+			};
+
+			udomain: untrusted-domain {
+				compatible = "opensbi,domain,instance";
+				possible-harts = <&cpu0 &cpu1 &cpu2 &cpu3 &cpu4 &cpu5 &cpu6>;
+				regions = <&tmem 0x0>, <&tuart 0x0>, <&allmem 0x38>;
+				boot-hart = <&cpu0>;
+				next-arg1 = <0x0 0x82200000>;
+				next-addr = <0x0 0x82000000>;
+				next-mode = <0x1>;
+				system-reset-allowed;
+			};
+		};
 	};
 
     /* 定义memory子节点，用于定义系统主内存 */   
@@ -38,6 +85,7 @@
 			reg = <0x0>;
 			status = "okay";      /* status属性用来表示启用该设备 */   
 			compatible = "riscv";
+			opensbi-domain = <&udomain>;
 			riscv,isa = "rv64imafdcsu";
 			mmu-type = "riscv,sv48";
 
@@ -61,6 +109,7 @@
 			reg = <0x1>;
 			status = "okay";      /* status属性用来表示启用该设备 */   
 			compatible = "riscv";
+			opensbi-domain = <&udomain>;
 			riscv,isa = "rv64imafdcsu";
 			mmu-type = "riscv,sv48";
 
@@ -78,6 +127,7 @@
 			reg = <0x2>;
 			status = "okay";      
 			compatible = "riscv";
+			opensbi-domain = <&udomain>;
 			riscv,isa = "rv64imafdcsu";
 			mmu-type = "riscv,sv48";
 
@@ -95,6 +145,7 @@
 			reg = <0x3>;
 			status = "okay";
 			compatible = "riscv";
+			opensbi-domain = <&udomain>;
 			riscv,isa = "rv64imafdcsu";
 			mmu-type = "riscv,sv48";
 
@@ -112,6 +163,7 @@
 			reg = <0x4>;
 			status = "okay";
 			compatible = "riscv";
+			opensbi-domain = <&udomain>;
 			riscv,isa = "rv64imafdcsu";
 			mmu-type = "riscv,sv48";
 
@@ -129,6 +181,7 @@
 			reg = <0x5>;
 			status = "okay";
 			compatible = "riscv";
+			opensbi-domain = <&udomain>;
 			riscv,isa = "rv64imafdcsu";
 			mmu-type = "riscv,sv48";
 
@@ -146,6 +199,7 @@
 			reg = <0x6>;
 			status = "okay";
 			compatible = "riscv";
+			opensbi-domain = <&udomain>;
 			riscv,isa = "rv64imafdcsu";
 			mmu-type = "riscv,sv48";
 
@@ -163,6 +217,7 @@
 			reg = <0x7>;
 			status = "okay";
 			compatible = "riscv";
+			opensbi-domain = <&tdomain>;
 			riscv,isa = "rv64imafdcsu";
 			mmu-type = "riscv,sv48";
 

@@ -48,6 +48,17 @@ _start:
 	slli	a2,	a2, 16       //a2 = 0x82280000
 	load_data a0,a1,a2
 
+	//load trusted_fw.bin
+	//[0x20400000:0x20800000] --> [0xb0000000:0xb0400000]
+    li		a0,	0x204
+	slli	a0,	a0, 20      //a0 = 0x20400000
+    li		a1,	0xb00
+	slli	a1,	a1, 20      //a1 = 0xb0000000
+    li		a2,	0xb04
+	slli	a2,	a2, 20      //a2 = 0xb0400000
+	load_data a0,a1,a2
+
+
     # mhartid 是 Machine Mode CSR，表示当前硬件线程编号
     csrr a0, mhartid # 获取当前 hart 的 ID
     li		t0,	0x0     
