@@ -1,5 +1,30 @@
-# 编译产物
+# Project build outputs
 output/
 
-# QEMU 构建目录
+# QEMU/OpenSBI build directories
 qemu-10.2.4/build/
+opensbi/build/
+
+# Local logs and temporary files
+*.log
+*.tmp
+
+# Generic compiled artifacts
+*.o
+*.d
+*.a
+*.so
+*.elf
+*.bin
+*.map
+*.lst
+*.asm
+*.sym
+*.img
+
+# xv6 generated files
+xv6-riscv/kernel/kernel
+xv6-riscv/mkfs/mkfs
+xv6-riscv/user/_*
+xv6-riscv/user/usys.S
+xv6-riscv/.gdbinit
