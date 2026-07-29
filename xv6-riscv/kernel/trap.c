@@ -5,6 +5,8 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "sbi.h"
+
 
 struct spinlock tickslock;
 uint ticks;
@@ -182,6 +184,14 @@ kerneltrap()
   w_sstatus(sstatus);
 }
 
+
+/* clockintr() 中：
+ * 修改前：w_stimecmp(r_time() + 1000000);
+ * 原因：直接写 stimecmp 依赖 Sstc 扩展且绕过 OpenSBI 的 timer 管理
+ *
+ * 修改后：通过 SBI ecall 让 OpenSBI 设置 mtimecmp
+ * 调用链：xv6 ecall → OpenSBI 写 ACLINT mtimecmp → 硬件比较 → 中断委托到 S-mode
+ */
 void
 clockintr()
 {
@@ -195,7 +205,7 @@ clockintr()
   // ask for the next timer interrupt. this also clears
   // the interrupt request. 1000000 is about a tenth
   // of a second.
-  w_stimecmp(r_time() + 1000000);
+  sbi_set_timer(r_time() + 1000000);
 }
 
 // check if it's an external interrupt or software interrupt,

@@ -58,6 +58,17 @@ _start:
 	slli	a2,	a2, 20      //a2 = 0xb0400000
 	load_data a0,a1,a2
 
+	//load xv6 kernel.bin
+	//[0x20800000:0x20a00000] --> [0x82000000:0x82200000]
+	//xv6 链接地址为 0x82000000，与 DTS 中 untrusted-domain next-addr 一致
+	//结束地址 0x82200000 正好是 DTB 起始位置，2MiB 窗口不会踩到 DTB
+    li		a0,	0x208
+	slli	a0,	a0, 20      //a0 = 0x20800000 (flash 中 xv6 的源地址)
+    li		a1,	0x820
+	slli	a1,	a1, 20      //a1 = 0x82000000 (DDR 中 xv6 的目标起始地址)
+    li		a2,	0x822
+	slli	a2,	a2, 20      //a2 = 0x82200000 (DDR 中 xv6 的目标结束地址)
+	load_data a0,a1,a2
 
     # mhartid 是 Machine Mode CSR，表示当前硬件线程编号
     csrr a0, mhartid # 获取当前 hart 的 ID

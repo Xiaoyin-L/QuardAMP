@@ -3,9 +3,10 @@
 #include "memlayout.h"
 #include "riscv.h"
 #include "defs.h"
+#include "sbi.h"
 
 void main();
-void timerinit();
+
 
 // entry.S needs one stack per CPU.
 __attribute__ ((aligned (16))) char stack0[4096 * NCPU];
@@ -14,53 +15,27 @@ __attribute__ ((aligned (16))) char stack0[4096 * NCPU];
 void
 start()
 {
-  // set M Previous Privilege mode to Supervisor, for mret.
-  unsigned long x = r_mstatus();
-  x &= ~MSTATUS_MPP_MASK;
-  x |= MSTATUS_MPP_S;
-  w_mstatus(x);
-
-  // set M Exception Program Counter to main, for mret.
-  // requires gcc -mcmodel=medany
-  w_mepc((uint64)main);
-
-  // disable paging for now.
+  /* 关闭页表（使用裸地址模式），确保后续初始化代码在物理地址空间执行。
+   * 这一步在 S-mode 下合法，satp 是 S-mode CSR。
+   */
   w_satp(0);
 
-  // delegate all interrupts and exceptions to supervisor mode.
-  w_medeleg(0xffff);
-  w_mideleg(0xffff);
+  /* 开启 S-mode 中断使能：
+   * SIE_SEIE = S-mode 外部中断（来自 PLIC，如 UART）
+   * SIE_STIE = S-mode 定时器中断（来自 ACLINT，经 OpenSBI 委托）
+   * 注意：不再设置 SIE_SSIE（软件中断），多核 IPI 后续通过 SBI HSM 处理
+   */
   w_sie(r_sie() | SIE_SEIE | SIE_STIE);
 
-  // configure Physical Memory Protection to give supervisor mode
-  // access to all of physical memory.
-  w_pmpaddr0(0x3fffffffffffffull);
-  w_pmpcfg0(0xf);
+  /* 设置第一次 timer 中断，让 OpenSBI 代写 mtimecmp。
+   * 原版直接写 stimecmp，但 mtimecmp 是 M-mode 寄存器，S-mode 不可访问。
+   * 通过 SBI TIME 扩展 ecall 请求 OpenSBI 设置。
+   */
+  sbi_set_timer(r_time() + 1000000);
 
-  // ask for clock interrupts.
-  timerinit();
+  /* 进入主初始化 */
+  main();
 
-  // keep each CPU's hartid in its tp register, for cpuid().
-  int id = r_mhartid();
-  w_tp(id);
-
-  // switch to supervisor mode and jump to main().
-  asm volatile("mret");
+  for(;;);
 }
 
-// ask each hart to generate timer interrupts.
-void
-timerinit()
-{
-  // enable supervisor-mode timer interrupts.
-  w_mie(r_mie() | MIE_STIE);
-  
-  // enable the sstc extension (i.e. stimecmp).
-  w_menvcfg(r_menvcfg() | (1L << 63)); 
-  
-  // allow supervisor to use stimecmp and time.
-  w_mcounteren(r_mcounteren() | 2);
-  
-  // ask for the very first timer interrupt.
-  w_stimecmp(r_time() + 1000000);
-}

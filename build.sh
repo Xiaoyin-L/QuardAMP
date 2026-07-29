@@ -29,7 +29,7 @@ if [ ! -d "$SHELL_FOLDER/output/opensbi" ]; then
 mkdir $SHELL_FOLDER/output/opensbi
 fi  
 cd $SHELL_FOLDER/opensbi
-make CROSS_COMPILE=$CROSS_PREFIX- PLATFORM=quard_star FW_TEXT_START=0x80000000 FW_JUMP_ADDR=0x80200000 FW_JUMP_FDT_ADDR=0x82200000
+make CROSS_COMPILE=$CROSS_PREFIX- PLATFORM=quard_star FW_TEXT_START=0x80000000 FW_JUMP_ADDR=0x82000000 FW_JUMP_FDT_ADDR=0x82200000
 cp -r $SHELL_FOLDER/opensbi/build/platform/quard_star/firmware/*.bin $SHELL_FOLDER/output/opensbi/
 
 # 生成sbi.dtb
@@ -46,6 +46,20 @@ $CROSS_PREFIX-gcc -nostartfiles -T./link.lds -Wl,-Map=$SHELL_FOLDER/output/trust
 $CROSS_PREFIX-objcopy -O binary -S $SHELL_FOLDER/output/trusted_domain/trusted_fw.elf $SHELL_FOLDER/output/trusted_domain/trusted_fw.bin
 $CROSS_PREFIX-objdump --source --demangle --disassemble --reloc --wide $SHELL_FOLDER/output/trusted_domain/trusted_fw.elf > $SHELL_FOLDER/output/trusted_domain/trusted_fw.lst
 
+# 编译xv6
+# xv6 使用系统 riscv64-linux-gnu 工具链（与 Buildroot 工具链前缀不同，互不冲突）
+# 产出 kernel.bin 链接在 0x82000000，与 DTS 中 untrusted-domain next-addr 一致
+if [ ! -d "$SHELL_FOLDER/output/xv6" ]; then
+mkdir $SHELL_FOLDER/output/xv6
+fi
+
+cd $SHELL_FOLDER/xv6-riscv
+make clean
+make TOOLPREFIX=riscv64-linux-gnu- kernel/kernel
+riscv64-linux-gnu-objcopy -O binary -S kernel/kernel $SHELL_FOLDER/output/xv6/kernel.bin
+riscv64-linux-gnu-objdump --source --demangle --disassemble --reloc --wide kernel/kernel > $SHELL_FOLDER/output/xv6/kernel.lst
+
+
 # 合成firmware固件
 if [ ! -d "$SHELL_FOLDER/output/fw" ]; then  
 mkdir $SHELL_FOLDER/output/fw
@@ -58,4 +72,5 @@ dd of=fw.bin bs=1k conv=notrunc seek=0 if=$SHELL_FOLDER/output/lowlevelboot/lowl
 dd of=fw.bin bs=1k conv=notrunc seek=512 if=$SHELL_FOLDER/output/opensbi/quard_star_sbi.dtb
 dd of=fw.bin bs=1k conv=notrunc seek=2K if=$SHELL_FOLDER/output/opensbi/fw_jump.bin
 dd of=fw.bin bs=1k conv=notrunc seek=4K if=$SHELL_FOLDER/output/trusted_domain/trusted_fw.bin
+dd of=fw.bin bs=1k conv=notrunc seek=8K if=$SHELL_FOLDER/output/xv6/kernel.bin
 cd $SHELL_FOLDER

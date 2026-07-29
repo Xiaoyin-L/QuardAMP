@@ -35,8 +35,12 @@
 
 // the kernel expects there to be RAM
 // for use by the kernel and user pages
-// from physical address 0x80000000 to PHYSTOP.
-#define KERNBASE 0x80000000L
+// from physical address 0x82000000 to PHYSTOP.
+/* KERNBASE 必须与 kernel.ld 的链接地址一致，
+ * 因为 xv6 的虚拟地址直接映射物理地址（恒等映射），
+ * 如果 KERNBASE 和实际加载地址不一致，页表映射会指向错误的物理页 
+ */
+#define KERNBASE 0x82000000L
 #define PHYSTOP (KERNBASE + 128*1024*1024)
 
 // map the trampoline page to the highest address,

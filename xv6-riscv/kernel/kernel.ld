@@ -7,7 +7,8 @@ SECTIONS
    * ensure that entry.S / _entry is at 0x80000000,
    * where qemu's -kernel jumps.
    */
-  . = 0x80000000;
+   /* 与 DTS 中 next-addr 一致，避开 OpenSBI 占用的 0x80000000~0x80200000 */
+  . = 0x82000000;
 
   .text : {
     kernel/entry.o(_entry)
