@@ -45,6 +45,19 @@ static int tx_chan;           // &tx_chan is the "wait channel"
 extern volatile int panicking; // from printf.c
 extern volatile int panicked; // from printf.c
 
+static void
+uartputc_locked(int c)
+{
+  while(tx_busy != 0){
+    // wait for a UART transmit-complete interrupt
+    // to set tx_busy to 0.
+    sleep(&tx_chan, &tx_lock);
+  }
+
+  WriteReg(THR, c);
+  tx_busy = 1;
+}
+
 void
 uartinit(void)
 {
@@ -83,15 +96,10 @@ uartwrite(char buf[], int n)
 
   int i = 0;
   while(i < n){ 
-    while(tx_busy != 0){
-      // wait for a UART transmit-complete interrupt
-      // to set tx_busy to 0.
-      sleep(&tx_chan, &tx_lock);
-    }   
-      
-    WriteReg(THR, buf[i]);
+    if(buf[i] == '\n')
+      uartputc_locked('\r');
+    uartputc_locked(buf[i]);
     i += 1;
-    tx_busy = 1;
   }
 
   release(&tx_lock);

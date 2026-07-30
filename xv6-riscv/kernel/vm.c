@@ -68,6 +68,8 @@ kvminit(void)
   kernel_pagetable = kvmmake();
 }
 
+
+static inline void dbg_putc(char c) { *(volatile char*)0x10000000 = c; }
 // Switch the current CPU's h/w page table register to
 // the kernel's page table, and enable paging.
 void
@@ -75,8 +77,9 @@ kvminithart()
 {
   // wait for any previous writes to the page table memory to finish.
   sfence_vma();
-
+  // dbg_putc('o');
   w_satp(MAKE_SATP(kernel_pagetable));
+  // dbg_putc('k');
 
   // flush stale entries from the TLB.
   sfence_vma();

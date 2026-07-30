@@ -108,6 +108,14 @@ static int quard_star_domains_init(void)
 	return fdt_domains_populate(fdt_get_address());
 }
 
+// 新增：解析 DTS 中的 ISA 扩展字符串
+static int quard_star_extensions_init(bool cold_boot)
+{
+    if (!cold_boot)
+        return 0;
+    return fdt_parse_isa_extensions_all_harts(fdt_get_address());
+}
+
 const struct sbi_platform_operations platform_ops = {
 	.early_init		= quard_star_early_init,
 	.final_init		= quard_star_final_init,
@@ -116,6 +124,7 @@ const struct sbi_platform_operations platform_ops = {
 	.domains_init		= quard_star_domains_init,
 	.irqchip_init		= fdt_irqchip_init,
 	.timer_init		= fdt_timer_init,
+	.extensions_init = quard_star_extensions_init,
 	
 };
 

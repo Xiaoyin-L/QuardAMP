@@ -1,6 +1,7 @@
 set -e
 SHELL_FOLDER=$(cd "$(dirname "$0")";pwd)
 CROSS_PREFIX=/opt/riscv64-lp64d--glibc--stable-2025.08-1/bin/riscv64-linux
+XV6_TOOLPREFIX=riscv64-linux-gnu-
 
 # 编译qemu
 cd "$SHELL_FOLDER/qemu-10.2.4"
@@ -55,9 +56,9 @@ fi
 
 cd $SHELL_FOLDER/xv6-riscv
 make clean
-make TOOLPREFIX=riscv64-linux-gnu- kernel/kernel
-riscv64-linux-gnu-objcopy -O binary -S kernel/kernel $SHELL_FOLDER/output/xv6/kernel.bin
-riscv64-linux-gnu-objdump --source --demangle --disassemble --reloc --wide kernel/kernel > $SHELL_FOLDER/output/xv6/kernel.lst
+make TOOLPREFIX=$XV6_TOOLPREFIX kernel/kernel fs.img
+${XV6_TOOLPREFIX}objcopy -O binary -S kernel/kernel $SHELL_FOLDER/output/xv6/kernel.bin
+${XV6_TOOLPREFIX}objdump --source --demangle --disassemble --reloc --wide kernel/kernel > $SHELL_FOLDER/output/xv6/kernel.lst
 
 
 # 合成firmware固件

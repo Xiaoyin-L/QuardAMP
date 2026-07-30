@@ -36,7 +36,8 @@ static const MemMapEntry virt_memmap[] = {
     [QUARD_STAR_CLINT]  = { 0x2000000,         0x10000 },
     [QUARD_STAR_PLIC]   = { 0xc000000, QUARD_STAR_PLIC_SIZE(QUARD_STAR_CPUS_MAX * 2) },
     [QUARD_STAR_UART0] = { 0x10000000,         0x100 },
-    [QUARD_STAR_UART1] = { 0x10001000,         0x100 },
+    [QUARD_STAR_VIRTIO] = { 0x10001000,        0x1000},
+    [QUARD_STAR_UART1] = { 0x10003000,         0x100 },
     [QUARD_STAR_UART2] = { 0x10002000,         0x100 },
     [QUARD_STAR_FLASH] = { 0x20000000,         0x2000000 },
     [QUARD_STAR_DRAM]  = { 0x80000000,           0x0 },
@@ -269,6 +270,12 @@ static void quad_star_board_init(MachineState *machine)
     serial_mm_init(system_memory, memmap[QUARD_STAR_UART2].base,
         0, qdev_get_gpio_in(DEVICE(mmio_plic), QUARD_STAR_UART2_IRQ), 399193,
         serial_hd(2), DEVICE_LITTLE_ENDIAN);
+
+    sysbus_create_simple(
+        "virtio-mmio",
+        memmap[QUARD_STAR_VIRTIO].base,
+        qdev_get_gpio_in(DEVICE(mmio_plic), QUARD_STAR_VIRTIO_IRQ)
+    );
 
     s->flash = quard_star_flash_create(s, "quard-star.flash0", "pflash0");
     pflash_cfi01_legacy_drive(s->flash, drive_get(IF_PFLASH, 0, 0));

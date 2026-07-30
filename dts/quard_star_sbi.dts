@@ -86,7 +86,7 @@
 			status = "okay";      /* status属性用来表示启用该设备 */   
 			compatible = "riscv";
 			opensbi-domain = <&udomain>;
-			riscv,isa = "rv64imafdcsu";
+			riscv,isa = "rv64imafdcsu_svadu";
 			mmu-type = "riscv,sv48";
 
 			interrupt-controller { /* 定义中断控制器子节点 */   
@@ -110,7 +110,7 @@
 			status = "okay";      /* status属性用来表示启用该设备 */   
 			compatible = "riscv";
 			opensbi-domain = <&udomain>;
-			riscv,isa = "rv64imafdcsu";
+			riscv,isa = "rv64imafdcsu_svadu";
 			mmu-type = "riscv,sv48";
 
 			interrupt-controller { /* 定义中断控制器子节点 */   
@@ -128,7 +128,7 @@
 			status = "okay";      
 			compatible = "riscv";
 			opensbi-domain = <&udomain>;
-			riscv,isa = "rv64imafdcsu";
+			riscv,isa = "rv64imafdcsu_svadu";
 			mmu-type = "riscv,sv48";
 
 			interrupt-controller { 
@@ -146,7 +146,7 @@
 			status = "okay";
 			compatible = "riscv";
 			opensbi-domain = <&udomain>;
-			riscv,isa = "rv64imafdcsu";
+			riscv,isa = "rv64imafdcsu_svadu";
 			mmu-type = "riscv,sv48";
 
 			interrupt-controller {
@@ -164,7 +164,7 @@
 			status = "okay";
 			compatible = "riscv";
 			opensbi-domain = <&udomain>;
-			riscv,isa = "rv64imafdcsu";
+			riscv,isa = "rv64imafdcsu_svadu";
 			mmu-type = "riscv,sv48";
 
 			interrupt-controller {
@@ -182,7 +182,7 @@
 			status = "okay";
 			compatible = "riscv";
 			opensbi-domain = <&udomain>;
-			riscv,isa = "rv64imafdcsu";
+			riscv,isa = "rv64imafdcsu_svadu";
 			mmu-type = "riscv,sv48";
 
 			interrupt-controller {
@@ -200,7 +200,7 @@
 			status = "okay";
 			compatible = "riscv";
 			opensbi-domain = <&udomain>;
-			riscv,isa = "rv64imafdcsu";
+			riscv,isa = "rv64imafdcsu_svadu";
 			mmu-type = "riscv,sv48";
 
 			interrupt-controller {
@@ -218,7 +218,7 @@
 			status = "okay";
 			compatible = "riscv";
 			opensbi-domain = <&tdomain>;
-			riscv,isa = "rv64imafdcsu";
+			riscv,isa = "rv64imafdcsu_svadu";
 			mmu-type = "riscv,sv48";
 
 			interrupt-controller {
@@ -292,11 +292,11 @@
 			compatible = "ns16550a";
 		};
 
-        uart1: uart1@10001000 {
+        uart1: uart1@10003000 {
 			interrupts = <0xa>;
 			interrupt-parent = <0x11>;
 			clock-frequency = <0x384000>;
-			reg = <0x0 0x10001000 0x0 0x100>;
+			reg = <0x0 0x10003000 0x0 0x100>;
 			compatible = "ns16550a";
 		};
 
@@ -331,6 +331,13 @@
 			interrupts-extended = <0x10 0x3 0x10 0x7 0xe 0x3 0xe 0x7 0xc 0x3 0xc 0x7 0xa 0x3 0xa 0x7 0x8 0x3 0x8 0x7 0x6 0x3 0x6 0x7 0x4 0x3 0x4 0x7 0x2 0x3 0x2 0x7>;
 			reg = <0x0 0x2000000 0x0 0x10000>;
 			compatible = "riscv,clint0";
+		};
+
+		virtio_mmio@10001000 {
+			compatible = "virtio,mmio";
+			reg = <0x0 0x10001000 0x0 0x1000>;
+			interrupt-parent = <0x11>;
+			interrupts = <0x1>; /* 使用 PLIC 中断源 1 */
 		};
 
     };

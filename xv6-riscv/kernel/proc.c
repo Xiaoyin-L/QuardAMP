@@ -413,7 +413,7 @@ find_idlest_cpu_by_load(void)
   int idlest = -1;
   int min_load = 0x7fffffff;
 
-  for(i = 0; i < 3; i++){
+  for(i = 0; i < NCPU; i++){
     int load = runnable_weight_on_cpu(i);
     if(load < min_load){
       min_load = load;
@@ -666,20 +666,14 @@ kfork(void)
   release(&wait_lock);
 
   acquire(&np->lock);
-  np->state = RUNNABLE;
-  release(&np->lock);
-
-  acquire(&np->lock);
   np->nice = p->nice;
   np->exec_ticks = 0;
   np->weight = p->weight;
   np->vruntime = p->vruntime;
   np->slice_ticks = 0;
-  np->home_cpu = np->pid % 2; // 简单的负载均衡：新进程先放到自己 PID 对应的 CPU 上
+  np->home_cpu = cpuid();
+  np->state = RUNNABLE;
   release(&np->lock);
-
-  printf("fork/alloc: pid=%d home_cpu=%d nice=%d vruntime=%d\n",
-       np->pid, np->home_cpu, np->nice, (int)np->vruntime);
 
   return pid;
 }
