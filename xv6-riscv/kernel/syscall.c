@@ -103,6 +103,7 @@ extern uint64 sys_mkdir(void);
 extern uint64 sys_close(void);
 extern uint64 sys_setnice(void);
 extern uint64 sys_getnice(void);
+extern uint64 sys_slabinfo(void);
 
 // An array mapping syscall numbers from syscall.h
 // to the function that handles the system call.
@@ -130,6 +131,7 @@ static uint64 (*syscalls[])(void) = {
 [SYS_close]   sys_close,
 [SYS_setnice]   sys_setnice,
 [SYS_getnice]   sys_getnice,
+[SYS_slabinfo]  sys_slabinfo,
 };
 
 void

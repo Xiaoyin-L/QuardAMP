@@ -58,7 +58,16 @@ void            ireclaim(int);
 // kalloc.c
 void*           kalloc(void);
 void            kfree(void *);
+void*           kalloc_pages(int order);
+void            kfree_pages(void *, int order);
 void            kinit(void);
+
+// slab.c
+struct slab_stat_entry;
+void            slab_init(void);
+void*           kmalloc(uint64);
+void            kfree_obj(void *);
+int             slab_get_stats(struct slab_stat_entry *, int);
 
 // log.c
 void            initlog(int, struct superblock*);

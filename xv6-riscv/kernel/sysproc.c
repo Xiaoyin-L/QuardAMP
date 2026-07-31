@@ -6,6 +6,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "vm.h"
+#include "slab.h"
 
 uint64
 sys_exit(void)
@@ -126,4 +127,30 @@ sys_getnice(void)
 
   argint(0, &pid);
   return getnice(pid);
+}
+
+uint64
+sys_slabinfo(void)
+{
+  uint64 ubuf;
+  int max_entries;
+  struct slab_stat_entry kbuf[7];
+  int count;
+  struct proc *p;
+
+  argaddr(0, &ubuf);
+  argint(1, &max_entries);
+
+  if(max_entries <= 0)
+    return 0;
+  if(max_entries > 7)
+    max_entries = 7;
+
+  count = slab_get_stats(kbuf, max_entries);
+  p = myproc();
+  if(copyout(p->pagetable, ubuf, (char*)kbuf,
+             count * sizeof(struct slab_stat_entry)) < 0)
+    return -1;
+
+  return count;
 }

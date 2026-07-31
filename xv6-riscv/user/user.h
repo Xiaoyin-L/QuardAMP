@@ -2,6 +2,16 @@
 
 struct stat;
 
+struct slab_stat_entry {
+  uint64 obj_size;
+  uint64 objs_per_slab;
+  uint64 alloc_count;
+  uint64 free_count;
+  uint64 active_objs;
+  uint64 pages_used;
+  uint64 reclaim_count;
+};
+
 // system calls
 int fork(void);
 int exit(int) __attribute__((noreturn));
@@ -26,6 +36,7 @@ int pause(int);
 int uptime(void);
 int setnice(int, int);
 int getnice(int);
+int slabinfo(void*, int);
 
 // ulib.c
 int stat(const char*, struct stat*);

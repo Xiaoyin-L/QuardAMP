@@ -44,3 +44,4 @@ entry("pause");
 entry("uptime");
 entry("setnice");
 entry("getnice");
+entry("slabinfo");
