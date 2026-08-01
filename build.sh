@@ -42,10 +42,12 @@ if [ ! -d "$SHELL_FOLDER/output/trusted_domain" ]; then
 mkdir $SHELL_FOLDER/output/trusted_domain
 fi  
 cd $SHELL_FOLDER/trusted_domain
-$CROSS_PREFIX-gcc -x assembler-with-cpp -c startup.s -o $SHELL_FOLDER/output/trusted_domain/startup.o
-$CROSS_PREFIX-gcc -nostartfiles -T./link.lds -Wl,-Map=$SHELL_FOLDER/output/trusted_domain/trusted_fw.map -Wl,--gc-sections $SHELL_FOLDER/output/trusted_domain/startup.o -o $SHELL_FOLDER/output/trusted_domain/trusted_fw.elf
-$CROSS_PREFIX-objcopy -O binary -S $SHELL_FOLDER/output/trusted_domain/trusted_fw.elf $SHELL_FOLDER/output/trusted_domain/trusted_fw.bin
-$CROSS_PREFIX-objdump --source --demangle --disassemble --reloc --wide $SHELL_FOLDER/output/trusted_domain/trusted_fw.elf > $SHELL_FOLDER/output/trusted_domain/trusted_fw.lst
+make clean
+make CROSS_COMPILE=$CROSS_PREFIX-
+cp build/trusted_fw.elf $SHELL_FOLDER/output/trusted_domain/trusted_fw.elf
+cp build/trusted_fw.bin $SHELL_FOLDER/output/trusted_domain/trusted_fw.bin
+cp build/trusted_fw.lst $SHELL_FOLDER/output/trusted_domain/trusted_fw.lst
+cp build/trusted_fw.map $SHELL_FOLDER/output/trusted_domain/trusted_fw.map
 
 # 编译xv6
 # xv6 使用系统 riscv64-linux-gnu 工具链（与 Buildroot 工具链前缀不同，互不冲突）

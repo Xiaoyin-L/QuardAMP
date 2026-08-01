@@ -1,0 +1,26 @@
+#ifndef RISCV_ENCODING_H
+#define RISCV_ENCODING_H
+
+#define SSTATUS_SIE 0x00000002UL
+#define SSTATUS_SPIE 0x00000020UL
+#define SSTATUS_SPP 0x00000100UL
+#define SSTATUS_FS 0x00006000UL
+#define SSTATUS_SUM 0x00040000UL
+
+#define IRQ_S_SOFT 1
+#define IRQ_S_TIMER 5
+#define IRQ_S_EXT 9
+
+#define SIP_SSIP (1UL << IRQ_S_SOFT)
+#define SIP_STIP (1UL << IRQ_S_TIMER)
+#define SIP_SEIP (1UL << IRQ_S_EXT)
+
+#define CSR_SSTATUS 0x100
+#define CSR_SIE 0x104
+#define CSR_STVEC 0x105
+#define CSR_SEPC 0x141
+#define CSR_SCAUSE 0x142
+#define CSR_STVAL 0x143
+#define CSR_SIP 0x144
+
+#endif
