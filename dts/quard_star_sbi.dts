@@ -34,15 +34,22 @@
 				order = <64>;
 			};
 
+			tplic: tplic {
+				compatible = "opensbi,domain,memregion";
+				base = <0x0 0x0c000000>;
+				order = <22>; /* 4 MiB，覆盖 PLIC 0x0c000000-0x0c3fffff */
+				mmio;
+			};
+
 			tdomain: trusted-domain { /* 定义domain节点 */
 				compatible = "opensbi,domain,instance";  /* 节点名称 */
 				possible-harts = <&cpu7>; /* domain中允许使用的cpu core */
 				/* 给某个 domain 配它能访问哪些内存/MMIO 区域，以及访问权限。 */
-				regions = <&tmem 0x38>, <&tuart 0x18>;/* OpenSBI权限位: bit[3:5]为S/U读写执行权限 */
+				regions = <&tmem 0x38>, <&tuart 0x18>, <&tplic 0x18>;/* OpenSBI权限位: bit[3:5]为S/U读写执行权限 */
 				boot-hart = <&cpu7>; /* domain中用于boot的core */
 				next-arg1 = <0x0 0x00000000>; /* 下级程序的参数 */
 				next-addr = <0x0 0xb0000000>; /* 下级程序的起始地址 */
-				next-mode = <0x0>; /* 下级程序的允许模式 0为U模式，1为S模式 */
+				next-mode = <0x1>; /* 下级程序的允许模式 0为U模式，1为S模式 */
 				system-reset-allowed; /* 允许复位 */
 			};
 
