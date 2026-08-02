@@ -1,0 +1,7 @@
+interface:
+  display_name: "进展报告总结"
+  short_description: "把上文整理为固定结构的进展报告"
+  default_prompt: "Use $report-summary-to-target to summarize the preceding work into a structured progress report."
+
+policy:
+  allow_implicit_invocation: true

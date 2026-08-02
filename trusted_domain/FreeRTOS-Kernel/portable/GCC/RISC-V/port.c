@@ -131,8 +131,20 @@ extern void xPortStartFirstTask( void );
 
     /* 使能SIE中S模式Timer中断和Soft中断，注意此处使能并不会立即响应
 	xPortStartFirstTask中将打开全局使能 */
-    csr_set(CSR_SIE, SIP_STIP);
+    
+	/*
+	* 打开 S-mode 可响应的中断类型。
+	*
+	* SIP_STIP：Supervisor timer interrupt，由 SBI set_timer 触发，用作 FreeRTOS tick。
+	* SIP_SSIP：Supervisor software interrupt，后续可用于 IPI/yield。
+	* SIP_SEIP：Supervisor external interrupt，由 PLIC 投递，例如 uart2 IRQ。
+	*
+	* 这里打开的是 sie 中的局部中断使能位；真正的全局 SIE 位会在
+	* xPortStartFirstTask() 恢复第一个任务上下文时打开。
+	*/
+	csr_set(CSR_SIE, SIP_STIP);
     csr_set(CSR_SIE, SIP_SSIP);
+	csr_set(CSR_SIE, SIP_SEIP);
 
 	xPortStartFirstTask();
 
