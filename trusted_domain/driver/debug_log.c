@@ -82,6 +82,9 @@ void debug_log(const char *fmt, ...)
         case 's':
             debug_puts(va_arg(ap, const char *));
             break;
+        case 'c':
+            ns16550_putc((char)va_arg(ap, int));
+            break;
         case '%':
             ns16550_putc('%');
             break;
