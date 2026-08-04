@@ -55,6 +55,31 @@ static void vUartRxTask(void *p_arg)
     }
 }
 
+/*
+ * 阶段 2：反向 doorbell（FreeRTOS -> xv6）测试任务。
+ * FreeRTOS 侧没有 shell，无法像阶段 1 那样从用户态手动触发，
+ * 改用专用任务自动触发（与阶段 1 的 mailboxtest 用户程序对称）。
+ *
+ * 时序考量：先等 5 秒让 xv6 完成启动并执行 plicinit/plicinithart
+ * （在 PLIC 使能源 14）；随后间隔 2 秒连发两次不同 reason，
+ * 验证重复触发与 reason 锁存都正确。即便提前触发，
+ * 设备 pending 位会保持，xv6 使能后 PLIC 仍会补投递，不会丢。
+ */
+static void vMailboxTestTask(void *p_arg)
+{
+    vTaskDelay(pdMS_TO_TICKS(5000));
+    debug_log("mailboxtest: ring doorbell to xv6, reason=%x\n",
+              (unsigned long)0xa55a);
+    mailbox_ring_to_xv6(0xa55a);
+
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    debug_log("mailboxtest: ring doorbell to xv6, reason=%x\n",
+              (unsigned long)0x002b);
+    mailbox_ring_to_xv6(0x002b);
+
+    vTaskDelete(NULL);
+}
+
 static void vTaskCreate(void *p_arg)
 { 
 	debug_log("vTaskCreate\n");
@@ -62,6 +87,7 @@ static void vTaskCreate(void *p_arg)
     xTaskCreate(task1,"task1",2048,NULL,4,NULL);
     xTaskCreate(task2,"task2",2048,NULL,4,NULL);
     xTaskCreate(vUartRxTask,"vUartRxTask",2048,NULL,5,NULL);
+    xTaskCreate(vMailboxTestTask,"vMailboxTestTask",512,NULL,4,NULL);
 
     vTaskDelete(NULL);
 }

@@ -208,6 +208,7 @@ void            virtio_disk_intr(void);
 
 // mailbox.c
 void            mailbox_ring_to_rtos(uint32);
+void            mailboxintr(void);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))

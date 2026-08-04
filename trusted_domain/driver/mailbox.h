@@ -52,4 +52,14 @@ uint32_t mailbox_read_rx_from_xv6(void);
  */
 void mailbox_ack_to_rtos(void);
 
+/*
+ * 阶段 2：向 xv6 按一次 doorbell。
+ * 写 TX_TO_XV6：设备锁存 reason 到 RX_FROM_RTOS，
+ * 置 STATUS.to_xv6 pending，拉起 IRQ 线 1（PLIC 源 14）。
+ * 设备 IRQ_MASK 复位默认两方向都使能，无需额外写掩码。
+ * 若 xv6 尚未在 PLIC 使能源 14，pending 会保持，
+ * xv6 使能后 PLIC 会补投递（电平触发语义）。
+ */
+void mailbox_ring_to_xv6(uint32_t reason);
+
 #endif /* MAILBOX_H */

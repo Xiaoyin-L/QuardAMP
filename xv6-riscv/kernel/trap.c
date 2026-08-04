@@ -228,6 +228,12 @@ devintr()
       uartintr();
     } else if(irq == VIRTIO0_IRQ){
       virtio_disk_intr();
+    } else if(irq == MAILBOX_TO_XV6_IRQ){
+      // 阶段 2：FreeRTOS -> xv6 doorbell（PLIC 源 14）。
+      // mailboxintr() 内部已完成 读 reason + W1C ack，
+      // 必须在本函数末尾 plic_complete() 之前完成，
+      // 否则 complete 后设备中断条件仍在会造成中断风暴。
+      mailboxintr();
     } else if(irq){
       printf("unexpected interrupt irq=%d\n", irq);
     }

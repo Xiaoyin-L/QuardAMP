@@ -47,6 +47,11 @@
 #define MAILBOX_TO_RTOS_IRQ 13
 #define MAILBOX_TO_XV6_IRQ  14
 
+// STATUS / ack 位定义（与 QEMU hw/misc/quardamp_mailbox.c 一致）。
+// ack 采用 W1C：向 RX 寄存器写对应位 1 清 pending。
+#define MAILBOX_TO_RTOS_BIT (1 << 0)
+#define MAILBOX_TO_XV6_BIT  (1 << 1)
+
 // the kernel expects there to be RAM
 // for use by the kernel and user pages
 // from physical address 0x82000000 to PHYSTOP.

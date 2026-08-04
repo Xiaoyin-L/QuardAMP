@@ -56,3 +56,14 @@ void mailbox_ack_to_rtos(void)
      */
     *mailbox_reg(MAILBOX_RX_FROM_XV6) = MAILBOX_TO_RTOS_BIT;
 }
+
+void mailbox_ring_to_xv6(uint32_t reason)
+{
+    /*
+     * 阶段 2 反向 doorbell：写 TX_TO_XV6 即"按一次门铃"。
+     * 设备锁存 reason、置 to_xv6 pending 并拉起 IRQ 线 1（PLIC 源 14）。
+     * volatile 防止编译器优化掉这个有副作用的 MMIO 写；
+     * 设备要求 32 位对齐访问（QEMU 侧限定 4 字节）。
+     */
+    *mailbox_reg(MAILBOX_TX_TO_XV6) = reason;
+}
