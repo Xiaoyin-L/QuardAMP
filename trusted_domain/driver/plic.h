@@ -37,4 +37,7 @@ int plic_claim_hart7(void);
  */
 void plic_complete_hart7(int irq);
 
+/* plic.h 新增声明（并补 #include <stdint.h>） */
+void plic_set_irq_priority(int irq, uint32_t priority);
+
 #endif /* PLIC_H */

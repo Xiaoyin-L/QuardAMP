@@ -30,7 +30,8 @@ OBJS = \
   $K/sysfile.o \
   $K/kernelvec.o \
   $K/plic.o \
-  $K/virtio_disk.o
+  $K/virtio_disk.o \
+  $K/mailbox.o
 
 # riscv64-unknown-elf- or riscv64-linux-gnu-
 # perhaps in /opt/riscv/bin
@@ -148,6 +149,7 @@ UPROGS=\
 	$U/_test_cfs\
 	$U/_test_multi_cfs\
 	$U/_slabtest\
+	$U/_mailboxtest
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)

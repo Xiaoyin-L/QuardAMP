@@ -33,6 +33,20 @@
 #define PLIC_SPRIORITY(hart) (PLIC + 0x201000 + (hart)*0x2000)
 #define PLIC_SCLAIM(hart) (PLIC + 0x201004 + (hart)*0x2000)
 
+// AMP mailbox (quardamp-mailbox) doorbell device.
+// 地址与 PLIC 源编号必须与 QEMU hw/riscv/quard_star.c、
+// dts/quard_star_sbi.dts 及 FreeRTOS 侧 driver/quard_star.h 手工对齐。
+// 寄存器语义：TX 写触发 / RX 读不清 / W1C ack（见阶段 0 设计文档）。
+#define MAILBOX 0x10004000L
+#define MAILBOX_TX_TO_RTOS   (MAILBOX + 0x00)  // xv6 -> FreeRTOS doorbell
+#define MAILBOX_TX_TO_XV6    (MAILBOX + 0x04)  // FreeRTOS -> xv6 doorbell (阶段 2)
+#define MAILBOX_RX_FROM_XV6  (MAILBOX + 0x08)  // FreeRTOS 读 reason / W1C ack
+#define MAILBOX_RX_FROM_RTOS (MAILBOX + 0x0c)  // xv6 读 reason / W1C ack (阶段 2)
+#define MAILBOX_STATUS       (MAILBOX + 0x10)
+#define MAILBOX_IRQ_MASK     (MAILBOX + 0x14)
+#define MAILBOX_TO_RTOS_IRQ 13
+#define MAILBOX_TO_XV6_IRQ  14
+
 // the kernel expects there to be RAM
 // for use by the kernel and user pages
 // from physical address 0x82000000 to PHYSTOP.

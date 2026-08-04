@@ -154,3 +154,17 @@ sys_slabinfo(void)
 
   return count;
 }
+
+// 阶段 1 单向 doorbell（xv6 -> FreeRTOS）测试入口：
+// 用户态传入 reason，内核写 mailbox TX_TO_RTOS 寄存器。
+// 设备锁存 reason、置 pending 并拉起 PLIC 源 13，
+// FreeRTOS(hart7) 在其中断里打印收到。正式通道建立后该调用移除。
+uint64
+sys_mailboxring(void)
+{
+  int reason;
+
+  argint(0, &reason);
+  mailbox_ring_to_rtos((uint32)reason);
+  return 0;
+}

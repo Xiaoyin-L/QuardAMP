@@ -41,11 +41,26 @@
 				mmio;
 			};
 
+			/*
+			 * AMP mailbox MMIO 区域。
+			 * base 0x10004000 与 QEMU quard_star.c 的 QUARD_STAR_MAILBOX 一致，
+			 * order=12 即 4 KiB（base 需按 2^order 对齐）。
+			 * trusted-domain（FreeRTOS/hart7）需显式声明该区域才能访问；
+			 * untrusted-domain 已由 allmem 覆盖，无需额外声明。
+			 */
+			tmailbox: tmailbox {
+				compatible = "opensbi,domain,memregion";
+				base = <0x0 0x10004000>;
+				order = <12>;
+				mmio;
+				devices = <&mailbox>;
+			};
+
 			tdomain: trusted-domain { /* 定义domain节点 */
 				compatible = "opensbi,domain,instance";  /* 节点名称 */
 				possible-harts = <&cpu7>; /* domain中允许使用的cpu core */
 				/* 给某个 domain 配它能访问哪些内存/MMIO 区域，以及访问权限。 */
-				regions = <&tmem 0x38>, <&tuart 0x18>, <&tplic 0x18>;/* OpenSBI权限位: bit[3:5]为S/U读写执行权限 */
+				regions = <&tmem 0x38>, <&tuart 0x18>, <&tplic 0x18>, <&tmailbox 0x18>;/* OpenSBI权限位: bit[3:5]为S/U读写执行权限 */
 				boot-hart = <&cpu7>; /* domain中用于boot的core */
 				next-arg1 = <0x0 0x00000000>; /* 下级程序的参数 */
 				next-addr = <0x0 0xb0000000>; /* 下级程序的起始地址 */
@@ -345,6 +360,22 @@
 			reg = <0x0 0x10001000 0x0 0x1000>;
 			interrupt-parent = <0x11>;
 			interrupts = <0x1>; /* 使用 PLIC 中断源 1 */
+		};
+
+		/*
+		 * AMP mailbox 设备节点（quardamp-mailbox）。
+		 * reg 与 QEMU 中 QUARD_STAR_MAILBOX 基址和 MemoryRegion 大小一致；
+		 * OpenSBI domain memregion 单独按 4 KiB 对齐授权。
+		 * interrupts 含两个 PLIC 中断源（#interrupt-cells=1，故为两个独立 spec）：
+		 *   0xd (13) = MAILBOX_TO_RTOS_IRQ，xv6 写 mailbox 后通知 FreeRTOS
+		 *   0xe (14) = MAILBOX_TO_XV6_IRQ， FreeRTOS 写 mailbox 后通知 xv6
+		 * guest 驱动按索引区分方向。
+		 */
+		mailbox: mailbox@10004000 {
+			compatible = "quardamp,mailbox";
+			reg = <0x0 0x10004000 0x0 0x20>;
+			interrupt-parent = <0x11>;
+			interrupts = <0xd 0xe>;
 		};
 
     };

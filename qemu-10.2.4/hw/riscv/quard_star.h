@@ -33,6 +33,7 @@ enum {
     QUARD_STAR_UART1,
     QUARD_STAR_UART2,
     QUARD_STAR_VIRTIO,   // 新增：VirtIO 设备的 memmap 索引
+    QUARD_STAR_MAILBOX,  // 新增：AMP mailbox 设备的 memmap 索引
     QUARD_STAR_FLASH,
     QUARD_STAR_DRAM,
 };
@@ -42,6 +43,14 @@ enum {
     QUARD_STAR_UART1_IRQ = 11,
     QUARD_STAR_UART2_IRQ = 12,
     QUARD_STAR_VIRTIO_IRQ = 1,  // 新增：与 xv6 的 VIRTIO0_IRQ 保持一致
+    /*
+     * AMP mailbox 双向 doorbell 使用两条独立 PLIC 中断源：
+     *   TO_RTOS: xv6 写 mailbox 后通知 FreeRTOS(hart7)
+     *   TO_XV6 : FreeRTOS 写 mailbox 后通知 xv6(hart0~6)
+     * 分成两源避免单源被 PLIC 仲裁到单一 context。
+     */
+    QUARD_STAR_MAILBOX_TO_RTOS_IRQ = 13,
+    QUARD_STAR_MAILBOX_TO_XV6_IRQ  = 14,
 };
 
 #define QUARD_STAR_PLIC_HART_CONFIG    "MS"

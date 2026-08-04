@@ -32,6 +32,9 @@ kvmmake(void)
   // virtio mmio disk interface
   kvmmap(kpgtbl, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
 
+  // AMP mailbox doorbell registers (quardamp-mailbox, 阶段 1 单向 doorbell)
+  kvmmap(kpgtbl, MAILBOX, MAILBOX, PGSIZE, PTE_R | PTE_W);
+
   // PLIC
   kvmmap(kpgtbl, PLIC, PLIC, 0x4000000, PTE_R | PTE_W);
 

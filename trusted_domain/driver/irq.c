@@ -5,6 +5,7 @@
 #include "ns16550.h"
 #include "plic.h"
 #include "quard_star.h"
+#include "mailbox.h"
 
 /*
  * FreeRTOS RISC-V portASM.S 中声明了 weak handle_interrupt。
@@ -48,6 +49,24 @@ void handle_interrupt(void)
                     &xHigherPriorityTaskWoken);
             }
         }
+    } else if (irq == MAILBOX_TO_RTOS_IRQ) {
+        /*
+        * 阶段 1 单向 doorbell（xv6 -> FreeRTOS）冒烟处理：
+        * 顺序必须是 读 reason -> W1C ack -> PLIC complete：
+        *   1. 先读 RX_FROM_XV6 拿到 reason（只读不清，不丢 pending）；
+        *   2. 再向 RX_FROM_XV6 写 1 清设备侧 pending 并撤 IRQ 线，
+        *      若把 ack 放到 PLIC complete 之后，complete 瞬间设备侧
+        *      中断条件仍在，会立即再次 pending 造成中断风暴；
+        *   3. 最后由函数末尾的 plic_complete_hart7() 完成 PLIC 侧应答。
+        * 已知限制：读与 ack 之间若 xv6 又写一次 doorbell，新 reason
+        * 会覆盖旧值且被本次 ack 一并清掉（设备 reason 是直接赋值锁存）。
+        * 单向冒烟可接受；阶段 3 引入 shared memory 后，真实消息状态
+        * 以共享内存为准，doorbell 退化为纯通知。
+        */
+        uint32_t reason = mailbox_read_rx_from_xv6();
+        mailbox_ack_to_rtos();
+        debug_log("mailbox irq received, reason=%x\n",
+                (unsigned long)reason);
     } else {
         debug_log("plic: unknown irq %d\n", irq);
     }

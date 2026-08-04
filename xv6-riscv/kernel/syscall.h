@@ -25,3 +25,5 @@
 #define SYS_setnice  22
 #define SYS_getnice  23
 #define SYS_slabinfo 24
+
+#define SYS_mailboxring 25

@@ -126,3 +126,11 @@ void plic_complete_hart7(int irq)
 
     *plic_reg(PLIC_CLAIM(context)) = (uint32_t)irq;
 }
+
+/* plic.c：原 static plic_set_priority 保持不动，新增公开包装。
+ * 各设备驱动（uart2、mailbox 等）在自己的 init 中设置优先级，
+ * 避免把所有设备的 priority 硬编码进 plic_init_hart7()。 */
+void plic_set_irq_priority(int irq, uint32_t priority)
+{
+    plic_set_priority(irq, priority);
+}

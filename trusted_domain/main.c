@@ -7,6 +7,7 @@
 #include "ns16550.h"
 #include "plic.h"
 #include "quard_star.h"
+#include "mailbox.h"
 
 extern QueueHandle_t xUartRxQueue;
 
@@ -77,6 +78,14 @@ int main(void)
      */
     plic_init_hart7();
     plic_enable_irq_hart7(UART2_IRQ);
+
+    /*
+     * 阶段 1：注册 mailbox 单向 doorbell（xv6 -> FreeRTOS）。
+     * 设置 PLIC 源 13 优先级并在 hart7 context 使能。
+     * 同样必须早于 xPortStartScheduler() 打开 sie.SEIE，
+     * 否则 xv6 触发后中断无法投递到 handle_interrupt()。
+     */
+    mailbox_init();
 
     /*
      * 创建 UART RX 队列：64 个 char 元素。

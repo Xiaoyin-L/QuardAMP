@@ -8,6 +8,9 @@ config ARMSSE_CPUID
 config ARMSSE_MHU
     bool
 
+config QUARDAMP_MAILBOX
+    bool
+
 config ARMSSE_CPU_PWRCTRL
     bool
 

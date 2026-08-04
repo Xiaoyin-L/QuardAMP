@@ -37,6 +37,7 @@ int uptime(void);
 int setnice(int, int);
 int getnice(int);
 int slabinfo(void*, int);
+int mailboxring(int);
 
 // ulib.c
 int stat(const char*, struct stat*);

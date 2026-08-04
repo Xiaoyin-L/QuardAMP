@@ -76,6 +76,7 @@ config QUARD_STAR
     select SIFIVE_PLIC
     select PFLASH_CFI01
     select VIRTIO_MMIO
+    select QUARDAMP_MAILBOX
 
     
 config SHAKTI_C

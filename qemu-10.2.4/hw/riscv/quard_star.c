@@ -21,6 +21,7 @@
 #include "system/arch_init.h"
 #include "system/device_tree.h" 
 #include "system/system.h"
+#include "hw/misc/quardamp_mailbox.h"   /* 新增 include */
 
 
 #define QUARD_STAR_FLASH_SECTOR_SIZE (256 * KiB)
@@ -39,6 +40,11 @@ static const MemMapEntry virt_memmap[] = {
     [QUARD_STAR_VIRTIO] = { 0x10001000,        0x1000},
     [QUARD_STAR_UART1] = { 0x10003000,         0x100 },
     [QUARD_STAR_UART2] = { 0x10002000,         0x100 },
+    /*
+     * AMP mailbox 设备：为 xv6<->FreeRTOS 提供 doorbell 中断。
+     * 选用 0x10004000，避开已占用的 UART0/1/2 与 VIRTIO 区间。
+     */
+    [QUARD_STAR_MAILBOX] = { 0x10004000,  QUARDAMP_MAILBOX_SIZE },
     [QUARD_STAR_FLASH] = { 0x20000000,         0x2000000 },
     [QUARD_STAR_DRAM]  = { 0x80000000,           0x0 },
 };
@@ -276,6 +282,27 @@ static void quad_star_board_init(MachineState *machine)
         memmap[QUARD_STAR_VIRTIO].base,
         qdev_get_gpio_in(DEVICE(mmio_plic), QUARD_STAR_VIRTIO_IRQ)
     );
+
+    /* board_init() 中，virtio 实例化之后新增： */
+
+    /*
+     * 创建 AMP mailbox 设备并接入 PLIC：
+     *   IRQ 线 0 -> PLIC 源 MAILBOX_TO_RTOS_IRQ（通知 FreeRTOS/hart7）
+     *   IRQ 线 1 -> PLIC 源 MAILBOX_TO_XV6_IRQ （通知 xv6/hart0~6）
+     * guest 侧需在各自 PLIC context 使能对应中断源才能收到。
+     */
+    DeviceState *mailbox_dev = qdev_new(TYPE_QUARDAMP_MAILBOX);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(mailbox_dev), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(mailbox_dev), 0,
+                    memmap[QUARD_STAR_MAILBOX].base);
+    sysbus_connect_irq(SYS_BUS_DEVICE(mailbox_dev),
+                       QUARDAMP_MAILBOX_IRQ_TO_RTOS,
+                       qdev_get_gpio_in(DEVICE(mmio_plic),
+                                        QUARD_STAR_MAILBOX_TO_RTOS_IRQ));
+    sysbus_connect_irq(SYS_BUS_DEVICE(mailbox_dev),
+                       QUARDAMP_MAILBOX_IRQ_TO_XV6,
+                       qdev_get_gpio_in(DEVICE(mmio_plic),
+                                        QUARD_STAR_MAILBOX_TO_XV6_IRQ));
 
     s->flash = quard_star_flash_create(s, "quard-star.flash0", "pflash0");
     pflash_cfi01_legacy_drive(s->flash, drive_get(IF_PFLASH, 0, 0));
