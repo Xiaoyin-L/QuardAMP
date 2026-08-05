@@ -39,6 +39,8 @@ int getnice(int);
 int slabinfo(void*, int);
 int mailboxring(int);
 int shmemsend(int);
+int iccsend(int, int, char*, int, int);
+int iccrecv(int, char*, int);
 
 // ulib.c
 int stat(const char*, struct stat*);

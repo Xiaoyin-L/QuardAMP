@@ -29,3 +29,5 @@
 #define SYS_mailboxring 25
 
 #define SYS_shmemsend 26
+#define SYS_iccsend   27
+#define SYS_iccrecv   28

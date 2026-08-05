@@ -48,9 +48,9 @@ mailboxintr(void)
   // 阶段 2 验证标准：FreeRTOS 触发后 xv6 kernel 打印收到中断。
   printf("mailbox irq from FreeRTOS, reason=%x\n", reason);
 
-  // 阶段 3：reason==SHMEM_DOORBELL_CH0 表示 to_xv6 消息槽环有新数据，
-  // 消费共享内存槽环（真实数据在那里，reason 只是通知）。
+  // 阶段 5：reason==SHMEM_DOORBELL_CH0 表示 to_xv6 消息槽环有新数据。
+  // ICC 层会搬环并按 endpoint 分发，必要时 wakeup 等待进程。
   if(reason == SHMEM_DOORBELL_CH0){
-    shmem_consume_from_rtos();
+    icc_notify_recv(reason);
   }
 }

@@ -312,7 +312,7 @@ void icc_echo_handler(struct shmem_msg *msg)
     reply->cmd = msg->cmd;
     reply->cookie = msg->cookie;
     reply->flags = 0;
-    fill_payload((volatile struct shmem_msg *)reply, "rtos->xv6 phase4 ack");
+    fill_payload((volatile struct shmem_msg *)reply, "rtos->xv6 phase5 ack");
 
     (void)icc_message_send(reply);
 }
@@ -339,7 +339,7 @@ void vIccTestTask(void *p_arg)
     msg->cmd = SHMEM_CMD_TEST;
     msg->cookie = 0x4001;
     msg->flags = 0;
-    fill_payload((volatile struct shmem_msg *)msg, "rtos->xv6 phase4 hello");
+    fill_payload((volatile struct shmem_msg *)msg, "rtos->xv6 phase5 hello");
     debug_log("icc test: send to xv6 cookie=%x\n", (unsigned long)msg->cookie);
 
     (void)icc_message_send(msg);

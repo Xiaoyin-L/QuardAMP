@@ -7,6 +7,7 @@
 #include "proc.h"
 #include "vm.h"
 #include "slab.h"
+#include "shmem.h"
 
 uint64
 sys_exit(void)
@@ -175,4 +176,81 @@ sys_shmemsend(void)
   int cookie;
   argint(0, &cookie);
   return shmem_send_to_rtos((uint32)cookie) == 0 ? 0 : (uint64)-1;
+}
+
+/*
+ * Stage 5 ICC send syscall.
+ *
+ * User space supplies the remote endpoint, command, payload pointer/length and
+ * cookie.  copyin() validates the user pointer before icc_send() publishes the
+ * message into the shared-memory ring.
+ */
+uint64
+sys_iccsend(void)
+{
+  int dst_ep;
+  int cmd;
+  int len;
+  int cookie;
+  uint64 payload_addr;
+  char payload[SHMSG_PAYLOAD_SIZE];
+
+  argint(0, &dst_ep);
+  argint(1, &cmd);
+  argaddr(2, &payload_addr);
+  argint(3, &len);
+  argint(4, &cookie);
+
+  if(len < 0)
+    len = 0;
+  if(len > SHMSG_PAYLOAD_SIZE)
+    len = SHMSG_PAYLOAD_SIZE;
+
+  if(len > 0){
+    if(copyin(myproc()->pagetable, payload, payload_addr, len) < 0)
+      return -1;
+  }
+
+  return icc_send((uint32)dst_ep, (uint32)cmd, payload,
+                  (uint32)len, (uint32)cookie) == 0 ? 0 : (uint64)-1;
+}
+
+/*
+ * Stage 5 ICC receive syscall.
+ *
+ * The kernel blocks in icc_recv() until a message reaches the requested local
+ * endpoint, then copies only the payload to user space and returns its length.
+ */
+uint64
+sys_iccrecv(void)
+{
+  int ep;
+  int max_len;
+  int copy_len;
+  uint64 buf_addr;
+  struct shmem_msg msg;
+
+  argint(0, &ep);
+  argaddr(1, &buf_addr);
+  argint(2, &max_len);
+
+  if(max_len < 0)
+    max_len = 0;
+
+  if(icc_recv((uint32)ep, &msg) < 0)
+    return -1;
+
+  copy_len = msg.len;
+  if(copy_len > max_len)
+    copy_len = max_len;
+  if(copy_len > SHMSG_PAYLOAD_SIZE)
+    copy_len = SHMSG_PAYLOAD_SIZE;
+
+  if(copy_len > 0){
+    if(copyout(myproc()->pagetable, buf_addr, msg.payload,
+               (uint64)copy_len) < 0)
+      return -1;
+  }
+
+  return copy_len;
 }

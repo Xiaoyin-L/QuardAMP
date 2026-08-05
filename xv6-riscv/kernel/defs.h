@@ -8,6 +8,7 @@ struct spinlock;
 struct sleeplock;
 struct stat;
 struct superblock;
+struct shmem_msg;
 
 // bio.c
 void            binit(void);
@@ -213,7 +214,12 @@ void            mailboxintr(void);
 // shmem.c
 void            shmem_init(void);
 int             shmem_send_to_rtos(uint32);
-void            shmem_consume_from_rtos(void);
+
+// icc.c
+void            icc_init(void);
+void            icc_notify_recv(uint32);
+int             icc_send(uint32, uint32, const char*, uint32, uint32);
+int             icc_recv(uint32, struct shmem_msg*);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))

@@ -2,16 +2,14 @@
 #include "user/user.h"
 
 /*
- * Stage 4 ICC smoke test.
+ * Stage 5 compatibility smoke test.
  *
- * Path:
- *   user shmemsend(cookie)
- *   -> xv6 shmem_send_to_rtos() publishes to the to_rtos ring
- *   -> mailbox reason 0 notifies FreeRTOS
- *   -> FreeRTOS ISR drains the ring into the ICC dispatch queue
- *   -> vIccDispatchTask runs icc_echo_handler()
- *   -> loan/send publishes the ack to the to_xv6 ring
- *   -> mailbox reason 0 notifies xv6, which consumes the reply.
+ * shmemsend() is kept as the older user entry, but its kernel backend now
+ * calls icc_send().  Replies are no longer consumed by shmem.c directly:
+ * mailboxintr() enters icc_notify_recv(), which dispatches to the local
+ * endpoint and wakes a process if one is blocked in iccrecv().
+ *
+ * Use icctest for the full synchronous user-space request/reply path.
  */
 int
 main(int argc, char *argv[])
@@ -28,6 +26,6 @@ main(int argc, char *argv[])
     exit(1);
   }
 
-  printf("shmemtest: done; ICC reply should arrive through mailbox irq\n");
+  printf("shmemtest: sent; reply is dispatched by the ICC layer\n");
   exit(0);
 }

@@ -47,3 +47,5 @@ entry("getnice");
 entry("slabinfo");
 entry("mailboxring");
 entry("shmemsend");
+entry("iccsend");
+entry("iccrecv");

@@ -28,6 +28,7 @@ main()
     kvminit();       // create kernel page table
     kvminithart();   // turn on paging
     shmem_init();
+    icc_init();
     procinit();      // process table
     trapinit();      // trap vectors
     trapinithart();  // install kernel trap vector
