@@ -8,6 +8,7 @@
 #include "plic.h"
 #include "quard_star.h"
 #include "mailbox.h"
+#include "icc.h"
 
 extern QueueHandle_t xUartRxQueue;
 
@@ -87,6 +88,8 @@ static void vTaskCreate(void *p_arg)
     xTaskCreate(task1,"task1",2048,NULL,4,NULL);
     xTaskCreate(task2,"task2",2048,NULL,4,NULL);
     xTaskCreate(vUartRxTask,"vUartRxTask",2048,NULL,5,NULL);
+    xTaskCreate(vIccDispatchTask,"vIccDispatchTask",512,NULL,5,NULL);
+    xTaskCreate(vIccTestTask,"vIccTestTask",512,NULL,4,NULL);
     xTaskCreate(vMailboxTestTask,"vMailboxTestTask",512,NULL,4,NULL);
 
     vTaskDelete(NULL);
@@ -112,6 +115,16 @@ int main(void)
      * 否则 xv6 触发后中断无法投递到 handle_interrupt()。
      */
     mailbox_init();
+
+    /*
+     * 阶段 4：ICC 两级处理。
+     * mailbox ISR 只负责把 to_rtos ring 搬入 xIccDispatchQueue，
+     * 真正的 endpoint 分发和 echo 回复放在 vIccDispatchTask 中完成。
+     */
+    icc_init();
+    if (icc_register_handler(SHMEM_EP_RTOS_ECHO, icc_echo_handler) != 0) {
+        debug_log("icc: register echo handler failed\n");
+    }
 
     /*
      * 创建 UART RX 队列：64 个 char 元素。

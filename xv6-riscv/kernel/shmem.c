@@ -7,7 +7,7 @@
 
 #define SHMEM_EP_XV6_TEST  0x00000100
 #define SHMEM_EP_RTOS_ECHO 0x00010100
-#define SHMEM_CMD_TEST     0x00000100
+#define SHMEM_CMD_TEST     0x00000200
 
 struct shmem_ctrl {
   volatile uint32 magic;
@@ -76,7 +76,7 @@ shmem_send_to_rtos(uint32 cookie)
   struct shmem_ctrl *c = ctrl();
   struct shmem_msg *ring = to_rtos_ring();
   struct shmem_msg *m;
-  const char payload[] = "xv6->rtos phase3 hello";
+  const char payload[] = "xv6->rtos phase4 hello";
   uint32 head;
   uint32 tail;
   uint32 idx;
@@ -116,7 +116,7 @@ shmem_send_to_rtos(uint32 cookie)
 
   release(&shmem_lock);
 
-  printf("shmem: send to_rtos idx=%d cookie=%x tail=%d\n",
+  printf("shmem: send to_rtos (icc) idx=%d cookie=%x tail=%d\n",
          idx, cookie, tail + 1);
   mailbox_ring_to_rtos(SHMEM_DOORBELL_CH0);
   return 0;
@@ -140,6 +140,11 @@ shmem_consume_from_rtos(void)
     return;
   }
 
+  /*
+   * 阶段 4 复用阶段 3 的反向消费路径：
+   * 既能接收 FreeRTOS 的 vIccTestTask 主动消息，也能接收
+   * ICC echo handler 对 xv6 请求的回复。
+   */
   for(;;){
     head = c->to_xv6_head;
     tail = c->to_xv6_tail;

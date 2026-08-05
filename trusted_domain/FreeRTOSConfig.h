@@ -13,7 +13,12 @@
 #define configTICK_RATE_HZ				( ( TickType_t ) 1000 )
 #define configMAX_PRIORITIES			( 7 )
 #define configMINIMAL_STACK_SIZE		( ( unsigned short ) 512 )
-#define configTOTAL_HEAP_SIZE			( ( size_t ) 64500 )
+/*
+ * Stage 4 adds the ICC dispatch queue, a send mutex, and two small tasks
+ * (dispatch + active test), so leave extra heap headroom beyond the stage-3
+ * UART/mailbox tasks.
+ */
+#define configTOTAL_HEAP_SIZE			( ( size_t ) 80000 )
 #define configMAX_TASK_NAME_LEN			( 16 )
 #define configUSE_16_BIT_TICKS			0
 #define configIDLE_SHOULD_YIELD			0
