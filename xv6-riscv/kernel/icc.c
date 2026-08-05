@@ -20,12 +20,18 @@
  *     syscall -> icc_send()
  *       -> fill to_rtos ring -> advance tail -> mailbox doorbell
  *
+ * Stage 6 adds a synchronous RPC layer on top of the same rings.  The caller
+ * submits one rpccall() syscall; the kernel allocates a cookie, sends the
+ * request, and sleeps on a pending slot until icc_notify_recv() sees the
+ * matching reply cookie.
+ *
  * xv6 does not run arbitrary callbacks from interrupt context.  Instead, the
- * interrupt stores a message in a pre-registered endpoint and wakes any process
- * sleeping in icc_recv().  This matches the normal xv6 console/pipe style and
- * keeps endpoint ownership easy to reason about.
+ * interrupt stores a message in a pre-registered endpoint or RPC pending slot
+ * and wakes the sleeping process.  This matches the normal xv6 console/pipe
+ * style and keeps endpoint ownership easy to reason about.
  */
 #define ICC_MAX_ENDPOINTS 8
+#define ICC_RPC_MAX_PENDING 4
 
 struct icc_endpoint {
   uint32 ep;
@@ -34,8 +40,19 @@ struct icc_endpoint {
   struct spinlock lock;
 };
 
+struct icc_rpc_pending {
+  uint32 cookie;
+  int in_use;
+  int has_reply;
+  struct shmem_msg reply;
+  struct spinlock lock;
+};
+
 static struct icc_endpoint icc_eps[ICC_MAX_ENDPOINTS];
 static struct spinlock icc_send_lock;
+static struct icc_rpc_pending icc_rpc_table[ICC_RPC_MAX_PENDING];
+static struct spinlock icc_rpc_lock;
+static uint32 icc_rpc_next_cookie = 0x6000;
 
 static struct icc_endpoint*
 icc_find_ep(uint32 ep)
@@ -100,6 +117,70 @@ icc_drop_pending(uint32 ep)
   release(&e->lock);
 }
 
+static struct icc_rpc_pending*
+icc_rpc_alloc(void)
+{
+  struct icc_rpc_pending *p = 0;
+
+  /*
+   * Table allocation and cookie generation are serialized separately from the
+   * per-slot lock.  The slot is marked in_use before the request is sent, so an
+   * early reply can be matched even if it arrives before the caller sleeps.
+   */
+  acquire(&icc_rpc_lock);
+  for(int i = 0; i < ICC_RPC_MAX_PENDING; i++){
+    if(!icc_rpc_table[i].in_use){
+      p = &icc_rpc_table[i];
+      acquire(&p->lock);
+      p->in_use = 1;
+      p->has_reply = 0;
+      p->cookie = icc_rpc_next_cookie++;
+      memset(&p->reply, 0, sizeof(p->reply));
+      release(&p->lock);
+      break;
+    }
+  }
+  release(&icc_rpc_lock);
+
+  return p;
+}
+
+static void
+icc_rpc_free(struct icc_rpc_pending *p)
+{
+  acquire(&icc_rpc_lock);
+  acquire(&p->lock);
+  p->in_use = 0;
+  p->has_reply = 0;
+  p->cookie = 0;
+  memset(&p->reply, 0, sizeof(p->reply));
+  release(&p->lock);
+  release(&icc_rpc_lock);
+}
+
+static int
+icc_rpc_try_match(struct shmem_msg *msg, char *payload)
+{
+  for(int i = 0; i < ICC_RPC_MAX_PENDING; i++){
+    struct icc_rpc_pending *p = &icc_rpc_table[i];
+
+    acquire(&p->lock);
+    if(p->in_use && p->cookie == msg->cookie){
+      p->reply = *msg;
+      p->has_reply = 1;
+      wakeup(p);
+      release(&p->lock);
+
+      printf("icc rx: rpc reply matched cookie=%x payload=%s\n",
+             msg->cookie, payload);
+      return 1;
+    }
+    release(&p->lock);
+  }
+
+  return 0;
+}
+
 void
 icc_init(void)
 {
@@ -116,8 +197,18 @@ icc_init(void)
   icc_eps[0].ep = SHMEM_EP_XV6_TEST;
 
   initlock(&icc_send_lock, "icc_send");
-  printf("icc: init endpoints=%d local_ep=%x\n",
-         ICC_MAX_ENDPOINTS, SHMEM_EP_XV6_TEST);
+
+  for(int i = 0; i < ICC_RPC_MAX_PENDING; i++){
+    icc_rpc_table[i].cookie = 0;
+    icc_rpc_table[i].in_use = 0;
+    icc_rpc_table[i].has_reply = 0;
+    memset(&icc_rpc_table[i].reply, 0, sizeof(icc_rpc_table[i].reply));
+    initlock(&icc_rpc_table[i].lock, "icc_rpc");
+  }
+  initlock(&icc_rpc_lock, "icc_rpc_tbl");
+
+  printf("icc: init endpoints=%d local_ep=%x rpc_pending=%d\n",
+         ICC_MAX_ENDPOINTS, SHMEM_EP_XV6_TEST, ICC_RPC_MAX_PENDING);
 }
 
 void
@@ -154,6 +245,15 @@ icc_notify_recv(uint32 reason)
     SHMEM_CTRL_BASE->to_xv6_head = head + 1;
 
     payload_to_string(payload, sizeof(payload), &msg);
+
+    /*
+     * Stage 6 RPC replies share the same to_xv6 ring as asynchronous endpoint
+     * messages.  A live RPC call owns a unique cookie, so check pending slots
+     * first.  Unmatched messages fall through to the stage-5 endpoint path.
+     */
+    if(icc_rpc_try_match(&msg, payload))
+      continue;
+
     e = icc_find_ep(msg.dst_ep);
     if(e != 0){
       acquire(&e->lock);
@@ -257,5 +357,66 @@ icc_recv(uint32 ep, struct shmem_msg *out)
   *out = e->msg;
   e->has_msg = 0;
   release(&e->lock);
+  return 0;
+}
+
+int
+icc_rpc_call(uint32 dst_ep, uint32 cmd, const char *payload, uint32 len,
+             char *reply_buf, uint32 reply_max, uint32 *reply_len)
+{
+  struct icc_rpc_pending *p;
+  uint32 cookie;
+  uint32 copy_len;
+
+  if(reply_len == 0)
+    return -1;
+
+  if(len > SHMSG_PAYLOAD_SIZE)
+    len = SHMSG_PAYLOAD_SIZE;
+  if(reply_max > SHMSG_PAYLOAD_SIZE)
+    reply_max = SHMSG_PAYLOAD_SIZE;
+
+  p = icc_rpc_alloc();
+  if(p == 0){
+    printf("icc rpc: pending table full\n");
+    return -1;
+  }
+
+  acquire(&p->lock);
+  cookie = p->cookie;
+  release(&p->lock);
+
+  if(icc_send(dst_ep, cmd, payload, len, cookie) < 0){
+    icc_rpc_free(p);
+    return -1;
+  }
+
+  /*
+   * The reply may arrive before we reach sleep().  Because icc_rpc_alloc()
+   * marks the slot in_use before icc_send(), the interrupt path will set
+   * has_reply and wake this slot; the while condition handles both orders.
+   */
+  acquire(&p->lock);
+  while(!p->has_reply && !killed(myproc()))
+    sleep(p, &p->lock);
+
+  if(killed(myproc())){
+    release(&p->lock);
+    icc_rpc_free(p);
+    return -1;
+  }
+
+  copy_len = p->reply.len;
+  if(copy_len > reply_max)
+    copy_len = reply_max;
+  if(copy_len > SHMSG_PAYLOAD_SIZE)
+    copy_len = SHMSG_PAYLOAD_SIZE;
+
+  if(copy_len > 0)
+    memmove(reply_buf, p->reply.payload, copy_len);
+  *reply_len = copy_len;
+  release(&p->lock);
+
+  icc_rpc_free(p);
   return 0;
 }

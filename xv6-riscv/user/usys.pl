@@ -49,3 +49,4 @@ entry("mailboxring");
 entry("shmemsend");
 entry("iccsend");
 entry("iccrecv");
+entry("rpccall");

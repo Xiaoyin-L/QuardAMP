@@ -31,4 +31,11 @@ void vIccDispatchTask(void *p_arg);
 void vIccTestTask(void *p_arg);
 void icc_echo_handler(struct shmem_msg *msg);
 
+/*
+ * Stage 6 RPC demo service.  The dispatch task calls this handler for
+ * SHMEM_EP_RTOS_UPPER; it uppercases the request payload, preserves the cookie,
+ * and sends the transformed payload back to the xv6 source endpoint.
+ */
+void icc_upper_handler(struct shmem_msg *msg);
+
 #endif /* ICC_H */

@@ -153,7 +153,8 @@ UPROGS=\
 	$U/_slabtest\
 	$U/_mailboxtest\
 	$U/_shmemtest\
-	$U/_icctest
+	$U/_icctest\
+	$U/_rpctest
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)

@@ -31,3 +31,4 @@
 #define SYS_shmemsend 26
 #define SYS_iccsend   27
 #define SYS_iccrecv   28
+#define SYS_rpccall   29

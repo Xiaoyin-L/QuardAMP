@@ -312,9 +312,58 @@ void icc_echo_handler(struct shmem_msg *msg)
     reply->cmd = msg->cmd;
     reply->cookie = msg->cookie;
     reply->flags = 0;
-    fill_payload((volatile struct shmem_msg *)reply, "rtos->xv6 phase5 ack");
+    reply->src_ep = SHMEM_EP_RTOS_ECHO;
+    fill_payload((volatile struct shmem_msg *)reply, "rtos->xv6 phase6 ack");
 
     (void)icc_message_send(reply);
+}
+
+void icc_upper_handler(struct shmem_msg *msg)
+{
+    struct shmem_msg *reply;
+    char payload[sizeof(msg->payload) + 1];
+    unsigned int len = msg->len;
+
+    payload_to_string(payload, sizeof(payload), msg);
+    debug_log("icc upper: rx src=%x dst=%x cmd=%x cookie=%x payload=%s\n",
+              (unsigned long)msg->src_ep, (unsigned long)msg->dst_ep,
+              (unsigned long)msg->cmd, (unsigned long)msg->cookie, payload);
+
+    reply = icc_message_loan(msg->src_ep);
+    if (reply == NULL) {
+        debug_log("icc upper: loan failed\n");
+        return;
+    }
+
+    if (len > sizeof(reply->payload)) {
+        len = sizeof(reply->payload);
+    }
+
+    /*
+     * Keep the service deliberately tiny and deterministic: ASCII lower-case
+     * bytes are converted in-place, all other bytes are returned unchanged.
+     * The cookie is copied from the request so xv6 can match the RPC pending
+     * slot without relying on endpoint order.
+     */
+    for (unsigned int i = 0; i < len; i++) {
+        uint8_t c = (uint8_t)msg->payload[i];
+
+        if (c >= 'a' && c <= 'z') {
+            c = (uint8_t)(c - ('a' - 'A'));
+        }
+        reply->payload[i] = (char)c;
+    }
+
+    reply->src_ep = SHMEM_EP_RTOS_UPPER;
+    reply->cmd = msg->cmd;
+    reply->cookie = msg->cookie;
+    reply->flags = 0;
+    reply->len = len;
+
+    if (icc_message_send(reply) == 0) {
+        debug_log("icc upper: reply sent cookie=%x\n",
+                  (unsigned long)msg->cookie);
+    }
 }
 
 void vIccTestTask(void *p_arg)
@@ -339,7 +388,8 @@ void vIccTestTask(void *p_arg)
     msg->cmd = SHMEM_CMD_TEST;
     msg->cookie = 0x4001;
     msg->flags = 0;
-    fill_payload((volatile struct shmem_msg *)msg, "rtos->xv6 phase5 hello");
+    msg->src_ep = SHMEM_EP_RTOS_ECHO;
+    fill_payload((volatile struct shmem_msg *)msg, "rtos->xv6 phase6 hello");
     debug_log("icc test: send to xv6 cookie=%x\n", (unsigned long)msg->cookie);
 
     (void)icc_message_send(msg);

@@ -254,3 +254,68 @@ sys_iccrecv(void)
 
   return copy_len;
 }
+
+/*
+ * Stage 6 RPC syscall.
+ *
+ * User space passes a remote endpoint, command, request payload and reply
+ * buffer.  The kernel keeps cookie allocation private to icc_rpc_call(), so
+ * callers cannot accidentally reuse a cookie and steal another process's
+ * reply.  copyin/copyout remain the only places that touch user addresses.
+ */
+uint64
+sys_rpccall(void)
+{
+  int dst_ep;
+  int cmd;
+  int plen;
+  int reply_max;
+  int copy_len;
+  uint64 payload_addr;
+  uint64 reply_addr;
+  char payload[SHMSG_PAYLOAD_SIZE];
+  char reply[SHMSG_PAYLOAD_SIZE];
+  uint32 reply_len;
+  struct proc *p;
+
+  argint(0, &dst_ep);
+  argint(1, &cmd);
+  argaddr(2, &payload_addr);
+  argint(3, &plen);
+  argaddr(4, &reply_addr);
+  argint(5, &reply_max);
+
+  if(plen < 0)
+    plen = 0;
+  if(plen > SHMSG_PAYLOAD_SIZE)
+    plen = SHMSG_PAYLOAD_SIZE;
+  if(reply_max < 0)
+    reply_max = 0;
+  if(reply_max > SHMSG_PAYLOAD_SIZE)
+    reply_max = SHMSG_PAYLOAD_SIZE;
+
+  p = myproc();
+  if(plen > 0){
+    if(copyin(p->pagetable, payload, payload_addr, plen) < 0)
+      return -1;
+  }
+
+  memset(reply, 0, sizeof(reply));
+  reply_len = 0;
+  if(icc_rpc_call((uint32)dst_ep, (uint32)cmd, payload, (uint32)plen,
+                  reply, (uint32)reply_max, &reply_len) < 0)
+    return -1;
+
+  copy_len = reply_len;
+  if(copy_len > reply_max)
+    copy_len = reply_max;
+  if(copy_len > SHMSG_PAYLOAD_SIZE)
+    copy_len = SHMSG_PAYLOAD_SIZE;
+
+  if(copy_len > 0){
+    if(copyout(p->pagetable, reply_addr, reply, (uint64)copy_len) < 0)
+      return -1;
+  }
+
+  return copy_len;
+}

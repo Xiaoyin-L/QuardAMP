@@ -125,6 +125,14 @@ int main(void)
     if (icc_register_handler(SHMEM_EP_RTOS_ECHO, icc_echo_handler) != 0) {
         debug_log("icc: register echo handler failed\n");
     }
+    /*
+     * Stage 6: register a second service endpoint used by xv6 rpctest.
+     * The handler runs in vIccDispatchTask context, not in the mailbox ISR,
+     * so doing byte-wise payload conversion and sending a reply is safe here.
+     */
+    if (icc_register_handler(SHMEM_EP_RTOS_UPPER, icc_upper_handler) != 0) {
+        debug_log("icc: register upper handler failed\n");
+    }
 
     /*
      * 创建 UART RX 队列：64 个 char 元素。

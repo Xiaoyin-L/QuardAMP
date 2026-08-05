@@ -14,8 +14,9 @@
  * Keep this header intentionally small: it describes the wire format only.
  * Policy such as endpoint sleep/wakeup belongs in kernel/icc.c.
  */
-#define SHMEM_EP_XV6_TEST  0x00000100
-#define SHMEM_EP_RTOS_ECHO 0x00010100
+#define SHMEM_EP_XV6_TEST    0x00000100
+#define SHMEM_EP_RTOS_ECHO   0x00010100
+#define SHMEM_EP_RTOS_UPPER  0x00010200
 #define SHMEM_CMD_TEST     0x00000200
 
 #define SHMSG_SLOT_NUM      SHMEM_RING_SIZE
