@@ -48,6 +48,10 @@ kvmmake(void)
   // the highest virtual address in the kernel.
   kvmmap(kpgtbl, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
 
+  // 阶段 3：AMP 共享内存 1 MiB（控制区 + 消息槽）。
+  // 普通内存非 MMIO，但同样在 PHYSTOP 之外，必须显式映射。
+  kvmmap(kpgtbl, SHMEM_ADDR, SHMEM_ADDR, SHMEM_SIZE, PTE_R | PTE_W);
+
   // allocate and map a kernel stack for each process.
   proc_mapstacks(kpgtbl);
   

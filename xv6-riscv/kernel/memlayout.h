@@ -52,6 +52,20 @@
 #define MAILBOX_TO_RTOS_BIT (1 << 0)
 #define MAILBOX_TO_XV6_BIT  (1 << 1)
 
+// AMP shared memory layout.
+#define SHMEM_ADDR 0xb2000000L
+#define SHMEM_SIZE (1024 * 1024)
+#define SHMEM_CTRL_OFFSET    0x0000
+#define SHMEM_TO_RTOS_OFFSET 0x1000
+#define SHMEM_TO_XV6_OFFSET  0x2000
+#define SHMEM_CTRL_SIZE      0x1000
+#define SHMEM_RING_SIZE 64
+#define SHMEM_MSG_SIZE 64
+#define SHMEM_RING_BYTES (SHMEM_RING_SIZE * SHMEM_MSG_SIZE)
+#define SHMEM_MAGIC 0x51414d50
+#define SHMEM_VERSION 1
+#define SHMEM_DOORBELL_CH0 0
+
 // the kernel expects there to be RAM
 // for use by the kernel and user pages
 // from physical address 0x82000000 to PHYSTOP.

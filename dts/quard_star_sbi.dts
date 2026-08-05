@@ -56,6 +56,13 @@
 				devices = <&mailbox>;
 			};
 
+			sdmem: sdmem {
+				compatible = "opensbi,domain,memregion";
+				base = <0x0 0xb2000000>;
+				order = <20>; /* 1 MiB */
+			};
+
+
 			tdomain: trusted-domain { /* 定义domain节点 */
 				compatible = "opensbi,domain,instance";  /* 节点名称 */
 				possible-harts = <&cpu7>; /* domain中允许使用的cpu core */
@@ -71,7 +78,7 @@
 			udomain: untrusted-domain {
 				compatible = "opensbi,domain,instance";
 				possible-harts = <&cpu0 &cpu1 &cpu2 &cpu3 &cpu4 &cpu5 &cpu6>;
-				regions = <&tmem 0x0>, <&tuart 0x0>, <&allmem 0x38>;
+				regions = <&tmem 0x0>, <&tuart 0x0>, <&allmem 0x38>, <&sdmem 0x18>;
 				boot-hart = <&cpu0>;
 				next-arg1 = <0x0 0x82200000>;
 				next-addr = <0x0 0x82000000>;
@@ -376,6 +383,11 @@
 			reg = <0x0 0x10004000 0x0 0x20>;
 			interrupt-parent = <0x11>;
 			interrupts = <0xd 0xe>;
+		};
+
+		shmem: shmem@b2000000 {
+			compatible = "quardamp,shared-memory";
+			reg = <0x0 0xb2000000 0x0 0x100000>;
 		};
 
     };

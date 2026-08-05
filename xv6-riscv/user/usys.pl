@@ -46,3 +46,4 @@ entry("setnice");
 entry("getnice");
 entry("slabinfo");
 entry("mailboxring");
+entry("shmemsend");

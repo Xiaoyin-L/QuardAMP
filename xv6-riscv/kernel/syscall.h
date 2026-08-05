@@ -27,3 +27,5 @@
 #define SYS_slabinfo 24
 
 #define SYS_mailboxring 25
+
+#define SYS_shmemsend 26

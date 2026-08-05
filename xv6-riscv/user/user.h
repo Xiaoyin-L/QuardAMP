@@ -38,6 +38,7 @@ int setnice(int, int);
 int getnice(int);
 int slabinfo(void*, int);
 int mailboxring(int);
+int shmemsend(int);
 
 // ulib.c
 int stat(const char*, struct stat*);

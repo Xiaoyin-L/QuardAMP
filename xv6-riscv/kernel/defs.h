@@ -210,5 +210,10 @@ void            virtio_disk_intr(void);
 void            mailbox_ring_to_rtos(uint32);
 void            mailboxintr(void);
 
+// shmem.c
+void            shmem_init(void);
+int             shmem_send_to_rtos(uint32);
+void            shmem_consume_from_rtos(void);
+
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))

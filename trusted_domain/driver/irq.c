@@ -6,6 +6,7 @@
 #include "plic.h"
 #include "quard_star.h"
 #include "mailbox.h"
+#include "shmem.h"
 
 /*
  * FreeRTOS RISC-V portASM.S 中声明了 weak handle_interrupt。
@@ -67,6 +68,10 @@ void handle_interrupt(void)
         mailbox_ack_to_rtos();
         debug_log("mailbox irq received, reason=%x\n",
                 (unsigned long)reason);
+
+        if (reason == SHMEM_DOORBELL_CH0) {
+            shmem_handle_to_rtos_doorbell();
+        }
     } else {
         debug_log("plic: unknown irq %d\n", irq);
     }

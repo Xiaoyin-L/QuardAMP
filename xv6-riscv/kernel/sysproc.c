@@ -168,3 +168,11 @@ sys_mailboxring(void)
   mailbox_ring_to_rtos((uint32)reason);
   return 0;
 }
+
+uint64
+sys_shmemsend(void)
+{
+  int cookie;
+  argint(0, &cookie);
+  return shmem_send_to_rtos((uint32)cookie) == 0 ? 0 : (uint64)-1;
+}

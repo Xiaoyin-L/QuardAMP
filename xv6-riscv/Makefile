@@ -31,6 +31,7 @@ OBJS = \
   $K/kernelvec.o \
   $K/plic.o \
   $K/virtio_disk.o \
+  $K/shmem.o \
   $K/mailbox.o
 
 # riscv64-unknown-elf- or riscv64-linux-gnu-
@@ -149,7 +150,8 @@ UPROGS=\
 	$U/_test_cfs\
 	$U/_test_multi_cfs\
 	$U/_slabtest\
-	$U/_mailboxtest
+	$U/_mailboxtest\
+	$U/_shmemtest
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)

@@ -105,6 +105,7 @@ extern uint64 sys_setnice(void);
 extern uint64 sys_getnice(void);
 extern uint64 sys_slabinfo(void);
 extern uint64 sys_mailboxring(void);
+extern uint64 sys_shmemsend(void);
 
 // An array mapping syscall numbers from syscall.h
 // to the function that handles the system call.
@@ -134,6 +135,7 @@ static uint64 (*syscalls[])(void) = {
 [SYS_getnice]   sys_getnice,
 [SYS_slabinfo]  sys_slabinfo,
 [SYS_mailboxring] sys_mailboxring,
+[SYS_shmemsend] sys_shmemsend,
 };
 
 void
