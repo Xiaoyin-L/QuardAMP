@@ -12,15 +12,10 @@ struct icc_handler_entry {
     icc_handler_t handler;
 };
 
-/*
- * Stage 4 的 FreeRTOS 侧 ICC 状态：
- * - xIccDispatchQueue：ISR 只把共享内存消息复制进队列，避免在中断里跑业务。
- * - xIccSendMutex：保护 to_xv6 ring 的 tail 分配，保证一次 loan/send 成对提交。
- * - icc_handlers：按 dst endpoint 分发，后续 rpmsg-like 服务可以继续注册新 EP。
- */
 static QueueHandle_t xIccDispatchQueue;
 static SemaphoreHandle_t xIccSendMutex;
 static struct icc_handler_entry icc_handlers[ICC_MAX_HANDLERS];
+static uint16_t icc_to_rtos_last_avail;
 
 static inline void icc_fence(void)
 {
@@ -37,45 +32,33 @@ static unsigned int payload_len(const char *s)
     return len;
 }
 
-static void copy_msg_from_volatile(struct shmem_msg *dst,
-                                   volatile struct shmem_msg *src)
+static void copy_from_volatile(void *dst, volatile void *src, uint32_t n)
 {
     uint8_t *d = (uint8_t *)dst;
     volatile uint8_t *s = (volatile uint8_t *)src;
 
-    for (unsigned int i = 0; i < sizeof(*dst); i++) {
+    for (uint32_t i = 0; i < n; i++) {
         d[i] = s[i];
     }
 }
 
-static void clear_volatile_msg(volatile struct shmem_msg *msg)
+static void clear_volatile(volatile void *ptr, uint32_t n)
 {
-    volatile uint8_t *p = (volatile uint8_t *)msg;
+    volatile uint8_t *p = (volatile uint8_t *)ptr;
 
-    for (unsigned int i = 0; i < sizeof(*msg); i++) {
+    for (uint32_t i = 0; i < n; i++) {
         p[i] = 0;
     }
 }
 
-static void fill_payload(volatile struct shmem_msg *msg, const char *payload)
-{
-    unsigned int len = payload_len(payload);
-
-    if (len > sizeof(msg->payload)) {
-        len = sizeof(msg->payload);
-    }
-
-    msg->len = len;
-    for (unsigned int i = 0; i < len; i++) {
-        msg->payload[i] = payload[i];
-    }
-}
-
 static void payload_to_string(char *dst, unsigned int dst_size,
-                              const struct shmem_msg *msg)
+                              const struct icc_msg *msg)
 {
     unsigned int len = msg->len;
 
+    if (dst_size == 0) {
+        return;
+    }
     if (len >= dst_size) {
         len = dst_size - 1;
     }
@@ -89,11 +72,102 @@ static void payload_to_string(char *dst, unsigned int dst_size,
     dst[len] = '\0';
 }
 
+static int rpmsg_decode_app(uint8_t *wire, uint32_t wire_len,
+                            struct icc_msg *out)
+{
+    struct rpmsg_hdr *hdr = (struct rpmsg_hdr *)wire;
+    struct rpmsg_app_hdr *app;
+    uint32_t payload_len;
+
+    if (wire_len < RPMSG_HDR_SIZE || hdr->len < RPMSG_APP_HDR_SIZE) {
+        return -1;
+    }
+    if (RPMSG_HDR_SIZE + hdr->len > wire_len) {
+        return -1;
+    }
+
+    app = (struct rpmsg_app_hdr *)hdr->data;
+    payload_len = hdr->len - RPMSG_APP_HDR_SIZE;
+    if (payload_len > SHMSG_PAYLOAD_SIZE) {
+        payload_len = SHMSG_PAYLOAD_SIZE;
+    }
+
+    out->src_ep = hdr->src;
+    out->dst_ep = hdr->dst;
+    out->cmd = app->cmd;
+    out->cookie = app->cookie;
+    out->flags = app->flags;
+    out->len = payload_len;
+    for (uint32_t i = 0; i < payload_len; i++) {
+        out->payload[i] = (char)hdr->data[RPMSG_APP_HDR_SIZE + i];
+    }
+    return 0;
+}
+
+void icc_prepare_app_message(struct rpmsg_hdr *hdr, uint32_t src_ep,
+                             uint32_t dst_ep, uint32_t cmd, uint32_t cookie,
+                             uint32_t flags, const char *payload,
+                             uint32_t len)
+{
+    volatile struct rpmsg_hdr *vhdr = (volatile struct rpmsg_hdr *)hdr;
+    volatile struct rpmsg_app_hdr *app;
+    volatile uint8_t *data;
+
+    if (len > SHMSG_PAYLOAD_SIZE) {
+        len = SHMSG_PAYLOAD_SIZE;
+    }
+
+    clear_volatile(vhdr, SHMEM_RPMSG_BUF_SIZE);
+    vhdr->src = src_ep;
+    vhdr->dst = dst_ep;
+    vhdr->reserved = 0;
+    vhdr->flags = 0;
+    vhdr->len = RPMSG_APP_HDR_SIZE + len;
+
+    app = (volatile struct rpmsg_app_hdr *)vhdr->data;
+    app->cmd = cmd;
+    app->cookie = cookie;
+    app->flags = flags;
+
+    data = vhdr->data + RPMSG_APP_HDR_SIZE;
+    for (uint32_t i = 0; i < len; i++) {
+        data[i] = (uint8_t)payload[i];
+    }
+}
+
+static void icc_prepare_ns_message(struct rpmsg_hdr *hdr, const char *name,
+                                   uint32_t addr)
+{
+    volatile struct rpmsg_hdr *vhdr = (volatile struct rpmsg_hdr *)hdr;
+    volatile struct rpmsg_ns_msg *ns;
+    uint32_t len = payload_len(name);
+
+    if (len >= RPMSG_NAME_SIZE) {
+        len = RPMSG_NAME_SIZE - 1;
+    }
+
+    clear_volatile(vhdr, SHMEM_RPMSG_BUF_SIZE);
+    vhdr->src = addr;
+    vhdr->dst = RPMSG_NS_ADDR;
+    vhdr->reserved = 0;
+    vhdr->flags = 0;
+    vhdr->len = sizeof(struct rpmsg_ns_msg);
+
+    ns = (volatile struct rpmsg_ns_msg *)vhdr->data;
+    for (uint32_t i = 0; i < len; i++) {
+        ns->name[i] = name[i];
+    }
+    ns->name[len] = '\0';
+    ns->addr = addr;
+    ns->flags = RPMSG_NS_CREATE;
+}
+
 void icc_init(void)
 {
     xIccDispatchQueue = xQueueCreate(ICC_DISPATCH_QUEUE_DEPTH,
-                                     sizeof(struct shmem_msg));
+                                     sizeof(struct icc_msg));
     xIccSendMutex = xSemaphoreCreateMutex();
+    icc_to_rtos_last_avail = 0;
 
     for (int i = 0; i < ICC_MAX_HANDLERS; i++) {
         icc_handlers[i].ep = 0;
@@ -101,14 +175,15 @@ void icc_init(void)
     }
 
     if (xIccDispatchQueue == NULL || xIccSendMutex == NULL) {
-        debug_log("icc init failed: queue=%p mutex=%p\n",
+        debug_log("rpmsg init failed: queue=%p mutex=%p\n",
                   (unsigned long)xIccDispatchQueue,
                   (unsigned long)xIccSendMutex);
         return;
     }
 
-    debug_log("icc init: queue depth=%d handlers=%d\n",
-              ICC_DISPATCH_QUEUE_DEPTH, ICC_MAX_HANDLERS);
+    debug_log("rpmsg init: queue depth=%d handlers=%d buf=%d payload=%d\n",
+              ICC_DISPATCH_QUEUE_DEPTH, ICC_MAX_HANDLERS,
+              SHMEM_RPMSG_BUF_SIZE, SHMSG_PAYLOAD_SIZE);
 }
 
 int icc_register_handler(uint32_t ep, icc_handler_t handler)
@@ -128,13 +203,13 @@ int icc_register_handler(uint32_t ep, icc_handler_t handler)
         if (icc_handlers[i].handler == NULL) {
             icc_handlers[i].ep = ep;
             icc_handlers[i].handler = handler;
-            debug_log("icc register: ep=%x slot=%d\n",
+            debug_log("rpmsg register: ep=%x slot=%d\n",
                       (unsigned long)ep, i);
             return 0;
         }
     }
 
-    debug_log("icc register failed: table full ep=%x\n", (unsigned long)ep);
+    debug_log("rpmsg register failed: table full ep=%x\n", (unsigned long)ep);
     return -1;
 }
 
@@ -145,36 +220,58 @@ void icc_isr_drain_to_rtos(void)
     if (xIccDispatchQueue == NULL) {
         return;
     }
-
     if (SHMEM_CTRL_BASE->magic != SHMEM_MAGIC ||
         SHMEM_CTRL_BASE->version != SHMEM_VERSION) {
         return;
     }
 
     for (;;) {
-        uint32_t head = SHMEM_CTRL_BASE->to_rtos_head;
-        uint32_t tail = SHMEM_CTRL_BASE->to_rtos_tail;
-        uint32_t idx;
-        struct shmem_msg msg;
+        uint16_t avail_idx = SHMEM_TO_RTOS_AVAIL->idx;
+        uint16_t used_idx;
+        uint16_t desc_id;
+        uint32_t wire_len;
+        uint8_t wire[SHMEM_RPMSG_BUF_SIZE];
+        struct icc_msg msg;
+        volatile struct vring_desc *desc;
+        volatile uint8_t *buf;
 
-        if (head == tail) {
+        if (icc_to_rtos_last_avail == avail_idx) {
             break;
         }
 
-        idx = head % SHMEM_RING_SIZE;
-        /*
-         * ISR 里复制整包，而不是把共享内存 slot 指针投进队列：
-         * head 前移后该 slot 就重新归 xv6 所有，任务上下文不能再依赖它。
-         */
-        icc_fence();
-        copy_msg_from_volatile(&msg, &SHMEM_TO_RTOS_BASE[idx]);
+        desc_id = SHMEM_TO_RTOS_AVAIL->ring[
+            icc_to_rtos_last_avail % SHMSG_SLOT_NUM];
+        if (desc_id >= SHMSG_SLOT_NUM) {
+            icc_to_rtos_last_avail++;
+            continue;
+        }
+
+        desc = &SHMEM_TO_RTOS_DESC[desc_id];
+        wire_len = desc->len;
+        if (wire_len > SHMEM_RPMSG_BUF_SIZE) {
+            wire_len = SHMEM_RPMSG_BUF_SIZE;
+        }
+        buf = (volatile uint8_t *)(uintptr_t)desc->addr;
 
         icc_fence();
-        SHMEM_CTRL_BASE->to_rtos_head = head + 1;
+        copy_from_volatile(wire, buf, wire_len);
+
+        used_idx = SHMEM_TO_RTOS_USED->idx;
+        SHMEM_TO_RTOS_USED->ring[used_idx % SHMSG_SLOT_NUM].id = desc_id;
+        SHMEM_TO_RTOS_USED->ring[used_idx % SHMSG_SLOT_NUM].len = desc->len;
+        icc_fence();
+        SHMEM_TO_RTOS_USED->idx = used_idx + 1;
+        icc_fence();
+        icc_to_rtos_last_avail++;
+
+        if (rpmsg_decode_app(wire, wire_len, &msg) < 0) {
+            debug_log("rpmsg isr: bad buffer len=%d\n", (int)wire_len);
+            continue;
+        }
 
         if (xQueueSendFromISR(xIccDispatchQueue, &msg,
                               &xHigherPriorityTaskWoken) != pdTRUE) {
-            debug_log("icc isr: dispatch queue full, drop cookie=%x\n",
+            debug_log("rpmsg isr: dispatch queue full, drop cookie=%x\n",
                       (unsigned long)msg.cookie);
         }
     }
@@ -182,12 +279,12 @@ void icc_isr_drain_to_rtos(void)
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
-struct shmem_msg *icc_message_loan(uint32_t dst_ep)
+struct rpmsg_hdr *icc_message_loan(uint32_t dst_ep)
 {
-    uint32_t head;
-    uint32_t tail;
-    uint32_t idx;
-    volatile struct shmem_msg *slot;
+    uint16_t avail_idx;
+    uint16_t used_idx;
+    uint16_t desc_id;
+    volatile uint8_t *buf;
 
     if (xIccSendMutex == NULL) {
         return NULL;
@@ -200,59 +297,67 @@ struct shmem_msg *icc_message_loan(uint32_t dst_ep)
         return NULL;
     }
 
-    /*
-     * loan 成功后，调用者独占当前 tail slot。
-     * 只有 icc_message_send() 发布 tail 或 icc_message_release() 放弃后，
-     * 其他任务才可以继续申请 to_xv6 发送槽。
-     */
-    head = SHMEM_CTRL_BASE->to_xv6_head;
-    tail = SHMEM_CTRL_BASE->to_xv6_tail;
-    if (tail - head >= SHMEM_RING_SIZE) {
-        debug_log("icc loan failed: to_xv6 full head=%d tail=%d\n",
-                  (int)head, (int)tail);
+    avail_idx = SHMEM_TO_XV6_AVAIL->idx;
+    used_idx = SHMEM_TO_XV6_USED->idx;
+    if ((uint16_t)(avail_idx - used_idx) >= SHMSG_SLOT_NUM) {
+        debug_log("rpmsg loan failed: to_xv6 full avail=%d used=%d\n",
+                  (int)avail_idx, (int)used_idx);
         xSemaphoreGive(xIccSendMutex);
         return NULL;
     }
 
-    idx = tail % SHMEM_RING_SIZE;
-    slot = &SHMEM_TO_XV6_BASE[idx];
-    clear_volatile_msg(slot);
-    slot->src_ep = SHMEM_EP_RTOS_ECHO;
-    slot->dst_ep = dst_ep;
-    slot->cmd = SHMEM_CMD_TEST;
-    slot->flags = 0;
+    desc_id = avail_idx % SHMSG_SLOT_NUM;
+    buf = SHMEM_TO_XV6_BUF_BASE + desc_id * SHMEM_RPMSG_BUF_SIZE;
+    clear_volatile(buf, SHMEM_RPMSG_BUF_SIZE);
 
-    return (struct shmem_msg *)slot;
+    ((volatile struct rpmsg_hdr *)buf)->src = SHMEM_EP_RTOS_ECHO;
+    ((volatile struct rpmsg_hdr *)buf)->dst = dst_ep;
+    ((volatile struct rpmsg_hdr *)buf)->reserved = 0;
+    ((volatile struct rpmsg_hdr *)buf)->flags = 0;
+    ((volatile struct rpmsg_hdr *)buf)->len = 0;
+
+    return (struct rpmsg_hdr *)buf;
 }
 
-int icc_message_send(struct shmem_msg *msg)
+int icc_message_send(struct rpmsg_hdr *msg)
 {
-    uint32_t tail = SHMEM_CTRL_BASE->to_xv6_tail;
-    uint32_t idx = tail % SHMEM_RING_SIZE;
-    volatile struct shmem_msg *slot = &SHMEM_TO_XV6_BASE[idx];
+    uint16_t avail_idx = SHMEM_TO_XV6_AVAIL->idx;
+    uint16_t desc_id = avail_idx % SHMSG_SLOT_NUM;
+    volatile uint8_t *expected =
+        SHMEM_TO_XV6_BUF_BASE + desc_id * SHMEM_RPMSG_BUF_SIZE;
+    uint32_t wire_len;
 
-    /*
-     * 只允许提交刚 loan 出来的 tail slot，避免误把历史 slot 或栈上消息
-     * 当成共享内存消息发布给 xv6。
-     */
     if (msg == NULL) {
         return -1;
     }
-    if ((volatile struct shmem_msg *)msg != slot) {
-        debug_log("icc send failed: msg=%p expected=%p\n",
-                  (unsigned long)msg, (unsigned long)slot);
+    if ((volatile uint8_t *)msg != expected) {
+        debug_log("rpmsg send failed: msg=%p expected=%p\n",
+                  (unsigned long)msg, (unsigned long)expected);
         xSemaphoreGive(xIccSendMutex);
         return -1;
     }
 
+    wire_len = RPMSG_HDR_SIZE + msg->len;
+    if (wire_len > SHMEM_RPMSG_BUF_SIZE) {
+        xSemaphoreGive(xIccSendMutex);
+        return -1;
+    }
+
+    SHMEM_TO_XV6_DESC[desc_id].addr = (uint64_t)(uintptr_t)msg;
+    SHMEM_TO_XV6_DESC[desc_id].len = wire_len;
+    SHMEM_TO_XV6_DESC[desc_id].flags = 0;
+    SHMEM_TO_XV6_DESC[desc_id].next = 0;
+    SHMEM_TO_XV6_AVAIL->ring[desc_id] = desc_id;
+
     icc_fence();
-    SHMEM_CTRL_BASE->to_xv6_tail = tail + 1;
-    mailbox_ring_to_xv6(SHMEM_DOORBELL_CH0);
+    SHMEM_TO_XV6_AVAIL->idx = avail_idx + 1;
+    icc_fence();
+    mailbox_ring_to_xv6(SHMEM_DOORBELL_VRING_TO_XV6);
     xSemaphoreGive(xIccSendMutex);
     return 0;
 }
 
-void icc_message_release(struct shmem_msg *msg)
+void icc_message_release(struct rpmsg_hdr *msg)
 {
     (void)msg;
 
@@ -261,9 +366,22 @@ void icc_message_release(struct shmem_msg *msg)
     }
 }
 
+static void icc_announce_service(const char *name, uint32_t addr)
+{
+    struct rpmsg_hdr *msg = icc_message_loan(RPMSG_NS_ADDR);
+
+    if (msg == NULL) {
+        debug_log("rpmsg ns: loan failed for %s\n", name);
+        return;
+    }
+
+    icc_prepare_ns_message(msg, name, addr);
+    (void)icc_message_send(msg);
+}
+
 void vIccDispatchTask(void *p_arg)
 {
-    struct shmem_msg msg;
+    struct icc_msg msg;
 
     (void)p_arg;
 
@@ -271,10 +389,6 @@ void vIccDispatchTask(void *p_arg)
         if (xQueueReceive(xIccDispatchQueue, &msg, portMAX_DELAY) == pdTRUE) {
             int found = 0;
 
-            /*
-             * 目前 handler 表很小，线性查找足够清楚；阶段 5 若 endpoint
-             * 数量变多，再替换为哈希或静态索引表。
-             */
             for (int i = 0; i < ICC_MAX_HANDLERS; i++) {
                 if (icc_handlers[i].handler != NULL &&
                     icc_handlers[i].ep == msg.dst_ep) {
@@ -285,7 +399,7 @@ void vIccDispatchTask(void *p_arg)
             }
 
             if (!found) {
-                debug_log("icc dispatch: no handler for dst=%x cookie=%x\n",
+                debug_log("rpmsg dispatch: no handler for dst=%x cookie=%x\n",
                           (unsigned long)msg.dst_ep,
                           (unsigned long)msg.cookie);
             }
@@ -293,106 +407,104 @@ void vIccDispatchTask(void *p_arg)
     }
 }
 
-void icc_echo_handler(struct shmem_msg *msg)
+void icc_echo_handler(struct icc_msg *msg)
 {
-    struct shmem_msg *reply;
+    struct rpmsg_hdr *reply;
     char payload[sizeof(msg->payload) + 1];
 
     payload_to_string(payload, sizeof(payload), msg);
-    debug_log("icc echo: rx src=%x dst=%x cmd=%x cookie=%x payload=%s\n",
+    debug_log("rpmsg echo: rx src=%x dst=%x cmd=%x cookie=%x payload=%s\n",
               (unsigned long)msg->src_ep, (unsigned long)msg->dst_ep,
               (unsigned long)msg->cmd, (unsigned long)msg->cookie, payload);
 
     reply = icc_message_loan(msg->src_ep);
     if (reply == NULL) {
-        debug_log("icc echo: loan failed\n");
+        debug_log("rpmsg echo: loan failed\n");
         return;
     }
 
-    reply->cmd = msg->cmd;
-    reply->cookie = msg->cookie;
-    reply->flags = 0;
-    reply->src_ep = SHMEM_EP_RTOS_ECHO;
-    fill_payload((volatile struct shmem_msg *)reply, "rtos->xv6 phase6 ack");
-
+    icc_prepare_app_message(reply, SHMEM_EP_RTOS_ECHO, msg->src_ep,
+                            msg->cmd, msg->cookie, 0,
+                            "rtos->xv6 rpmsg ack",
+                            payload_len("rtos->xv6 rpmsg ack"));
     (void)icc_message_send(reply);
 }
 
-void icc_upper_handler(struct shmem_msg *msg)
+void icc_upper_handler(struct icc_msg *msg)
 {
-    struct shmem_msg *reply;
+    struct rpmsg_hdr *reply;
+    volatile struct rpmsg_app_hdr *app;
+    volatile uint8_t *data;
     char payload[sizeof(msg->payload) + 1];
-    unsigned int len = msg->len;
+    uint32_t len = msg->len;
 
     payload_to_string(payload, sizeof(payload), msg);
-    debug_log("icc upper: rx src=%x dst=%x cmd=%x cookie=%x payload=%s\n",
+    debug_log("rpmsg upper: rx src=%x dst=%x cmd=%x cookie=%x payload=%s\n",
               (unsigned long)msg->src_ep, (unsigned long)msg->dst_ep,
               (unsigned long)msg->cmd, (unsigned long)msg->cookie, payload);
 
     reply = icc_message_loan(msg->src_ep);
     if (reply == NULL) {
-        debug_log("icc upper: loan failed\n");
+        debug_log("rpmsg upper: loan failed\n");
         return;
     }
 
-    if (len > sizeof(reply->payload)) {
-        len = sizeof(reply->payload);
+    if (len > SHMSG_PAYLOAD_SIZE) {
+        len = SHMSG_PAYLOAD_SIZE;
     }
 
-    /*
-     * Keep the service deliberately tiny and deterministic: ASCII lower-case
-     * bytes are converted in-place, all other bytes are returned unchanged.
-     * The cookie is copied from the request so xv6 can match the RPC pending
-     * slot without relying on endpoint order.
-     */
-    for (unsigned int i = 0; i < len; i++) {
+    clear_volatile(reply, SHMEM_RPMSG_BUF_SIZE);
+    reply->src = SHMEM_EP_RTOS_UPPER;
+    reply->dst = msg->src_ep;
+    reply->reserved = 0;
+    reply->flags = 0;
+    reply->len = RPMSG_APP_HDR_SIZE + len;
+
+    app = (volatile struct rpmsg_app_hdr *)reply->data;
+    app->cmd = msg->cmd;
+    app->cookie = msg->cookie;
+    app->flags = 0;
+    data = reply->data + RPMSG_APP_HDR_SIZE;
+
+    for (uint32_t i = 0; i < len; i++) {
         uint8_t c = (uint8_t)msg->payload[i];
 
         if (c >= 'a' && c <= 'z') {
             c = (uint8_t)(c - ('a' - 'A'));
         }
-        reply->payload[i] = (char)c;
+        data[i] = c;
     }
 
-    reply->src_ep = SHMEM_EP_RTOS_UPPER;
-    reply->cmd = msg->cmd;
-    reply->cookie = msg->cookie;
-    reply->flags = 0;
-    reply->len = len;
-
     if (icc_message_send(reply) == 0) {
-        debug_log("icc upper: reply sent cookie=%x\n",
+        debug_log("rpmsg upper: reply sent cookie=%x\n",
                   (unsigned long)msg->cookie);
     }
 }
 
 void vIccTestTask(void *p_arg)
 {
-    struct shmem_msg *msg;
+    struct rpmsg_hdr *msg;
 
     (void)p_arg;
 
-    /*
-     * 等 xv6 完成 shmem_init() 和 PLIC mailbox 使能后再主动发送。
-     * 这是阶段 4 的 FreeRTOS -> xv6 主动消息冒烟，不依赖用户输入。
-     */
     vTaskDelay(pdMS_TO_TICKS(9000));
+
+    icc_announce_service("rpmsg-echo", SHMEM_EP_RTOS_ECHO);
+    icc_announce_service("quardamp-rpc", SHMEM_EP_RTOS_UPPER);
 
     msg = icc_message_loan(SHMEM_EP_XV6_TEST);
     if (msg == NULL) {
-        debug_log("icc test: loan failed\n");
+        debug_log("rpmsg test: loan failed\n");
         vTaskDelete(NULL);
         return;
     }
 
-    msg->cmd = SHMEM_CMD_TEST;
-    msg->cookie = 0x4001;
-    msg->flags = 0;
-    msg->src_ep = SHMEM_EP_RTOS_ECHO;
-    fill_payload((volatile struct shmem_msg *)msg, "rtos->xv6 phase6 hello");
-    debug_log("icc test: send to xv6 cookie=%x\n", (unsigned long)msg->cookie);
+    icc_prepare_app_message(msg, SHMEM_EP_RTOS_ECHO, SHMEM_EP_XV6_TEST,
+                            SHMEM_CMD_TEST, 0x4001, 0,
+                            "rtos->xv6 rpmsg hello",
+                            payload_len("rtos->xv6 rpmsg hello"));
+    debug_log("rpmsg test: send to xv6 cookie=%x\n", (unsigned long)0x4001);
 
     (void)icc_message_send(msg);
-
     vTaskDelete(NULL);
 }

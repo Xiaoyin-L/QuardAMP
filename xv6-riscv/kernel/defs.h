@@ -8,7 +8,7 @@ struct spinlock;
 struct sleeplock;
 struct stat;
 struct superblock;
-struct shmem_msg;
+struct icc_msg;
 
 // bio.c
 void            binit(void);
@@ -219,7 +219,7 @@ int             shmem_send_to_rtos(uint32);
 void            icc_init(void);
 void            icc_notify_recv(uint32);
 int             icc_send(uint32, uint32, const char*, uint32, uint32);
-int             icc_recv(uint32, struct shmem_msg*);
+int             icc_recv(uint32, struct icc_msg*);
 int             icc_rpc_call(uint32, uint32, const char*, uint32, char*, uint32, uint32*);
 
 // number of elements in fixed-size array

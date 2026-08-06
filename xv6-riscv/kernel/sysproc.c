@@ -228,7 +228,7 @@ sys_iccrecv(void)
   int max_len;
   int copy_len;
   uint64 buf_addr;
-  struct shmem_msg msg;
+  struct icc_msg msg;
 
   argint(0, &ep);
   argaddr(1, &buf_addr);
