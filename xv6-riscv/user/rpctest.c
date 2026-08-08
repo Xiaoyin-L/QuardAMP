@@ -27,7 +27,7 @@ call_and_print(int ep, const char *name, char *req)
   memset(reply, 0, sizeof(reply));
   printf("rpctest: rpc_call to %s, req=%s\n", name, req);
 
-  n = rpccall(ep, 0x400, req, strlen(req), reply, SHMSG_PAYLOAD_SIZE);
+  n = rpccall(ep, 0x400, req, strlen(req), reply, SHMSG_PAYLOAD_SIZE, 2000);
   if(n < 0){
     printf("rpctest: rpc_call (%s) failed\n", name);
     return -1;

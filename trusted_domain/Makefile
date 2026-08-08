@@ -122,7 +122,7 @@ LDSCRIPT = $(PROJECTBASE)/$(LD_FILE)
 # libraries
 LIBS = -lgcc
 LIBDIR =
-LDFLAGS = $(MCU) -nostdlib -static -no-pie -T$(LDSCRIPT) $(LIBDIR) -Wl,-Map=$(BUILD_DIR)/$(TARGET).map -Wl,--gc-sections $(LIBS)
+LDFLAGS = $(MCU) -nostdlib -static -no-pie -T$(LDSCRIPT) $(LIBDIR) -Wl,-Map=$(BUILD_DIR)/$(TARGET).map -Wl,--gc-sections -Wl,--build-id=none $(LIBS)
 
 # default action: build all
 all: $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).hex $(BUILD_DIR)/$(TARGET).bin $(BUILD_DIR)/$(TARGET).lst

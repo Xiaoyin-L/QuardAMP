@@ -12,6 +12,11 @@
 
 extern QueueHandle_t xUartRxQueue;
 
+#ifndef QUARDAMP_DEMO
+#define QUARDAMP_DEMO 0
+#endif
+
+#if QUARDAMP_DEMO
 static void task1(void *p_arg)
 { 
     int time = 0;
@@ -31,6 +36,7 @@ static void task2(void *p_arg)
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
+#endif
 
 /*
  * UART RX 消费任务。
@@ -66,6 +72,7 @@ static void vUartRxTask(void *p_arg)
  * 验证重复触发与 reason 锁存都正确。即便提前触发，
  * 设备 pending 位会保持，xv6 使能后 PLIC 仍会补投递，不会丢。
  */
+#if QUARDAMP_DEMO
 static void vMailboxTestTask(void *p_arg)
 {
     vTaskDelay(pdMS_TO_TICKS(5000));
@@ -80,17 +87,22 @@ static void vMailboxTestTask(void *p_arg)
 
     vTaskDelete(NULL);
 }
+#endif
 
 static void vTaskCreate(void *p_arg)
 { 
 	debug_log("vTaskCreate\n");
 
+#if QUARDAMP_DEMO
     xTaskCreate(task1,"task1",2048,NULL,4,NULL);
     xTaskCreate(task2,"task2",2048,NULL,4,NULL);
+#endif
     xTaskCreate(vUartRxTask,"vUartRxTask",2048,NULL,5,NULL);
     xTaskCreate(vIccDispatchTask,"vIccDispatchTask",512,NULL,5,NULL);
+#if QUARDAMP_DEMO
     xTaskCreate(vIccTestTask,"vIccTestTask",512,NULL,4,NULL);
     xTaskCreate(vMailboxTestTask,"vMailboxTestTask",512,NULL,4,NULL);
+#endif
 
     vTaskDelete(NULL);
 }
@@ -132,6 +144,9 @@ int main(void)
      */
     if (icc_register_handler(SHMEM_EP_RTOS_UPPER, icc_upper_handler) != 0) {
         debug_log("icc: register upper handler failed\n");
+    }
+    if (icc_register_handler(SHMEM_EP_RTOS_BENCH, icc_bench_handler) != 0) {
+        debug_log("icc: register bench handler failed\n");
     }
 
     /*

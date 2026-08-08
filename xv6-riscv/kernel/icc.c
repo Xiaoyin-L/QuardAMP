@@ -21,16 +21,32 @@
  */
 #define ICC_MAX_ENDPOINTS 8
 #define ICC_RPC_MAX_PENDING 4
+#define ICC_EP_QUEUE_DEPTH 8
+#define ICC_TICK_MS 100
+
+#ifndef ICC_VERBOSE
+#define ICC_VERBOSE 0
+#endif
+
+#if ICC_VERBOSE
+#define icc_trace(...) printf(__VA_ARGS__)
+#else
+#define icc_trace(...) do { } while(0)
+#endif
 
 struct icc_endpoint {
   uint32 ep;
-  int has_msg;
-  struct icc_msg msg;
+  uint32 head;
+  uint32 count;
+  uint32 drops;
+  uint32 deadline;
+  struct icc_msg queue[ICC_EP_QUEUE_DEPTH];
   struct spinlock lock;
 };
 
 struct icc_rpc_pending {
   uint32 cookie;
+  uint32 deadline;
   int in_use;
   int has_reply;
   struct icc_msg reply;
@@ -43,6 +59,38 @@ static struct icc_rpc_pending icc_rpc_table[ICC_RPC_MAX_PENDING];
 static struct spinlock icc_rpc_lock;
 static uint32 icc_rpc_next_cookie = 0x6000;
 static uint16 icc_to_xv6_last_avail;
+
+static uint32
+icc_now_ticks(void)
+{
+  uint32 now;
+
+  acquire(&tickslock);
+  now = ticks;
+  release(&tickslock);
+  return now;
+}
+
+static uint32
+icc_timeout_to_ticks(uint32 timeout_ms)
+{
+  uint32 timeout_ticks;
+
+  if(timeout_ms == 0)
+    return 0;
+  timeout_ticks = (timeout_ms + ICC_TICK_MS - 1) / ICC_TICK_MS;
+  if(timeout_ticks == 0)
+    timeout_ticks = 1;
+  return timeout_ticks;
+}
+
+static int
+icc_deadline_expired(uint32 deadline)
+{
+  if(deadline == 0)
+    return 0;
+  return (int)(icc_now_ticks() - deadline) >= 0;
+}
 
 static struct icc_endpoint*
 icc_find_ep(uint32 ep)
@@ -98,7 +146,9 @@ icc_drop_pending(uint32 ep)
     return;
 
   acquire(&e->lock);
-  e->has_msg = 0;
+  e->head = 0;
+  e->count = 0;
+  e->deadline = 0;
   release(&e->lock);
 }
 
@@ -196,6 +246,7 @@ icc_rpc_alloc(void)
       p->in_use = 1;
       p->has_reply = 0;
       p->cookie = icc_rpc_next_cookie++;
+      p->deadline = 0;
       memset(&p->reply, 0, sizeof(p->reply));
       release(&p->lock);
       break;
@@ -214,6 +265,7 @@ icc_rpc_free(struct icc_rpc_pending *p)
   p->in_use = 0;
   p->has_reply = 0;
   p->cookie = 0;
+  p->deadline = 0;
   memset(&p->reply, 0, sizeof(p->reply));
   release(&p->lock);
   release(&icc_rpc_lock);
@@ -229,11 +281,12 @@ icc_rpc_try_match(struct icc_msg *msg, char *payload)
     if(p->in_use && p->cookie == msg->cookie){
       p->reply = *msg;
       p->has_reply = 1;
+      p->deadline = 0;
       wakeup(p);
       release(&p->lock);
 
-      printf("rpmsg rx: rpc reply matched cookie=%x payload=%s\n",
-             msg->cookie, payload);
+      icc_trace("rpmsg rx: rpc reply matched cookie=%x payload=%s\n",
+                msg->cookie, payload);
       return 1;
     }
     release(&p->lock);
@@ -247,7 +300,10 @@ icc_init(void)
 {
   for(int i = 0; i < ICC_MAX_ENDPOINTS; i++){
     icc_eps[i].ep = 0;
-    icc_eps[i].has_msg = 0;
+    icc_eps[i].head = 0;
+    icc_eps[i].count = 0;
+    icc_eps[i].drops = 0;
+    icc_eps[i].deadline = 0;
     initlock(&icc_eps[i].lock, "icc_ep");
   }
 
@@ -256,6 +312,7 @@ icc_init(void)
 
   for(int i = 0; i < ICC_RPC_MAX_PENDING; i++){
     icc_rpc_table[i].cookie = 0;
+    icc_rpc_table[i].deadline = 0;
     icc_rpc_table[i].in_use = 0;
     icc_rpc_table[i].has_reply = 0;
     memset(&icc_rpc_table[i].reply, 0, sizeof(icc_rpc_table[i].reply));
@@ -334,18 +391,25 @@ icc_notify_recv(uint32 reason)
 
     e = icc_find_ep(msg.dst_ep);
     if(e != 0){
+      uint32 tail;
+
       acquire(&e->lock);
-      if(e->has_msg){
-        printf("rpmsg rx: overwrite ep=%x old_cookie=%x new_cookie=%x\n",
-               msg.dst_ep, e->msg.cookie, msg.cookie);
+      if(e->count == ICC_EP_QUEUE_DEPTH){
+        e->drops++;
+        printf("rpmsg rx: queue full ep=%x drops=%d cookie=%x\n",
+               msg.dst_ep, e->drops, msg.cookie);
+        release(&e->lock);
+        continue;
       }
-      e->msg = msg;
-      e->has_msg = 1;
+      tail = (e->head + e->count) % ICC_EP_QUEUE_DEPTH;
+      e->queue[tail] = msg;
+      e->count++;
+      e->deadline = 0;
       wakeup(e);
       release(&e->lock);
 
-      printf("rpmsg rx: ep=%x src=%x cmd=%x cookie=%x payload=%s\n",
-             msg.dst_ep, msg.src_ep, msg.cmd, msg.cookie, payload);
+      icc_trace("rpmsg rx: ep=%x src=%x cmd=%x cookie=%x payload=%s\n",
+                msg.dst_ep, msg.src_ep, msg.cmd, msg.cookie, payload);
     } else {
       printf("rpmsg rx: no endpoint dst=%x src=%x cmd=%x cookie=%x payload=%s\n",
              msg.dst_ep, msg.src_ep, msg.cmd, msg.cookie, payload);
@@ -402,42 +466,63 @@ icc_send(uint32 dst_ep, uint32 cmd, const char *payload, uint32 len,
 
   release(&icc_send_lock);
 
-  printf("rpmsg tx: desc=%d dst=%x cmd=%x cookie=%x len=%d -> FreeRTOS\n",
-         desc_id, dst_ep, cmd, cookie, len);
+  icc_trace("rpmsg tx: desc=%d dst=%x cmd=%x cookie=%x len=%d -> FreeRTOS\n",
+            desc_id, dst_ep, cmd, cookie, len);
   mailbox_ring_to_rtos(SHMEM_DOORBELL_VRING_TO_RTOS);
   return 0;
 }
 
 int
-icc_recv(uint32 ep, struct icc_msg *out)
+icc_recv(uint32 ep, struct icc_msg *out, uint32 timeout_ms)
 {
   struct icc_endpoint *e = icc_find_ep(ep);
+  uint32 timeout_ticks;
+  uint32 deadline = 0;
 
   if(e == 0)
     return -1;
 
+  timeout_ticks = icc_timeout_to_ticks(timeout_ms);
+  if(timeout_ticks != 0)
+    deadline = icc_now_ticks() + timeout_ticks;
+
   acquire(&e->lock);
-  while(!e->has_msg && !killed(myproc()))
+  e->deadline = deadline;
+  while(e->count == 0 && !killed(myproc())){
+    if(icc_deadline_expired(deadline)){
+      e->deadline = 0;
+      release(&e->lock);
+      return -1;
+    }
     sleep(e, &e->lock);
+  }
 
   if(killed(myproc())){
+    e->deadline = 0;
     release(&e->lock);
     return -1;
   }
 
-  *out = e->msg;
-  e->has_msg = 0;
+  *out = e->queue[e->head];
+  e->head = (e->head + 1) % ICC_EP_QUEUE_DEPTH;
+  e->count--;
+  if(e->count != 0)
+    wakeup(e);
+  e->deadline = 0;
   release(&e->lock);
   return 0;
 }
 
 int
 icc_rpc_call(uint32 dst_ep, uint32 cmd, const char *payload, uint32 len,
-             char *reply_buf, uint32 reply_max, uint32 *reply_len)
+             char *reply_buf, uint32 reply_max, uint32 *reply_len,
+             uint32 timeout_ms)
 {
   struct icc_rpc_pending *p;
   uint32 cookie;
   uint32 copy_len;
+  uint32 timeout_ticks;
+  uint32 deadline = 0;
 
   if(reply_len == 0)
     return -1;
@@ -446,6 +531,9 @@ icc_rpc_call(uint32 dst_ep, uint32 cmd, const char *payload, uint32 len,
     len = SHMSG_PAYLOAD_SIZE;
   if(reply_max > SHMSG_PAYLOAD_SIZE)
     reply_max = SHMSG_PAYLOAD_SIZE;
+  timeout_ticks = icc_timeout_to_ticks(timeout_ms);
+  if(timeout_ticks != 0)
+    deadline = icc_now_ticks() + timeout_ticks;
 
   p = icc_rpc_alloc();
   if(p == 0){
@@ -455,6 +543,7 @@ icc_rpc_call(uint32 dst_ep, uint32 cmd, const char *payload, uint32 len,
 
   acquire(&p->lock);
   cookie = p->cookie;
+  p->deadline = deadline;
   release(&p->lock);
 
   if(icc_send(dst_ep, cmd, payload, len, cookie) < 0){
@@ -463,8 +552,14 @@ icc_rpc_call(uint32 dst_ep, uint32 cmd, const char *payload, uint32 len,
   }
 
   acquire(&p->lock);
-  while(!p->has_reply && !killed(myproc()))
+  while(!p->has_reply && !killed(myproc())){
+    if(icc_deadline_expired(deadline)){
+      release(&p->lock);
+      icc_rpc_free(p);
+      return -1;
+    }
     sleep(p, &p->lock);
+  }
 
   if(killed(myproc())){
     release(&p->lock);
@@ -485,4 +580,30 @@ icc_rpc_call(uint32 dst_ep, uint32 cmd, const char *payload, uint32 len,
 
   icc_rpc_free(p);
   return 0;
+}
+
+void
+icc_timeout_poll(void)
+{
+  for(int i = 0; i < ICC_MAX_ENDPOINTS; i++){
+    struct icc_endpoint *e = &icc_eps[i];
+
+    acquire(&e->lock);
+    if(e->count == 0 && icc_deadline_expired(e->deadline)){
+      e->deadline = 0;
+      wakeup(e);
+    }
+    release(&e->lock);
+  }
+
+  for(int i = 0; i < ICC_RPC_MAX_PENDING; i++){
+    struct icc_rpc_pending *p = &icc_rpc_table[i];
+
+    acquire(&p->lock);
+    if(p->in_use && !p->has_reply && icc_deadline_expired(p->deadline)){
+      p->deadline = 0;
+      wakeup(p);
+    }
+    release(&p->lock);
+  }
 }

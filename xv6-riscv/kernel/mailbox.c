@@ -45,12 +45,12 @@ mailboxintr(void)
   // 设备撤销 PLIC 源 14 的 IRQ 线。写 0 无效，避免误清另一方向。
   *(volatile uint32*)MAILBOX_RX_FROM_RTOS = MAILBOX_TO_XV6_BIT;
 
-  // 阶段 2 验证标准：FreeRTOS 触发后 xv6 kernel 打印收到中断。
-  printf("mailbox irq from FreeRTOS, reason=%x\n", reason);
-
   // rpmsg 阶段：reason 的 bit1 表示 FreeRTOS 更新了 to_xv6 vring。
   // 兼容旧 CH0 值，便于旧固件/测试仍能触发接收路径。
   if((reason & SHMEM_DOORBELL_VRING_TO_XV6) || reason == SHMEM_DOORBELL_CH0){
     icc_notify_recv(reason);
+  } else {
+    // 手工 mailbox 冒烟测试仍保留可见输出；高频 rpmsg kick 保持静默。
+    printf("mailbox irq from FreeRTOS, reason=%x\n", reason);
   }
 }

@@ -219,8 +219,9 @@ int             shmem_send_to_rtos(uint32);
 void            icc_init(void);
 void            icc_notify_recv(uint32);
 int             icc_send(uint32, uint32, const char*, uint32, uint32);
-int             icc_recv(uint32, struct icc_msg*);
-int             icc_rpc_call(uint32, uint32, const char*, uint32, char*, uint32, uint32*);
+int             icc_recv(uint32, struct icc_msg*, uint32);
+int             icc_rpc_call(uint32, uint32, const char*, uint32, char*, uint32, uint32*, uint32);
+void            icc_timeout_poll(void);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))

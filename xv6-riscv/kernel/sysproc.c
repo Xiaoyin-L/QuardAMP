@@ -226,6 +226,7 @@ sys_iccrecv(void)
 {
   int ep;
   int max_len;
+  int timeout_ms;
   int copy_len;
   uint64 buf_addr;
   struct icc_msg msg;
@@ -233,11 +234,14 @@ sys_iccrecv(void)
   argint(0, &ep);
   argaddr(1, &buf_addr);
   argint(2, &max_len);
+  argint(3, &timeout_ms);
 
   if(max_len < 0)
     max_len = 0;
+  if(timeout_ms < 0)
+    timeout_ms = 0;
 
-  if(icc_recv((uint32)ep, &msg) < 0)
+  if(icc_recv((uint32)ep, &msg, (uint32)timeout_ms) < 0)
     return -1;
 
   copy_len = msg.len;
@@ -270,6 +274,7 @@ sys_rpccall(void)
   int cmd;
   int plen;
   int reply_max;
+  int timeout_ms;
   int copy_len;
   uint64 payload_addr;
   uint64 reply_addr;
@@ -284,6 +289,7 @@ sys_rpccall(void)
   argint(3, &plen);
   argaddr(4, &reply_addr);
   argint(5, &reply_max);
+  argint(6, &timeout_ms);
 
   if(plen < 0)
     plen = 0;
@@ -293,6 +299,8 @@ sys_rpccall(void)
     reply_max = 0;
   if(reply_max > SHMSG_PAYLOAD_SIZE)
     reply_max = SHMSG_PAYLOAD_SIZE;
+  if(timeout_ms < 0)
+    timeout_ms = 0;
 
   p = myproc();
   if(plen > 0){
@@ -303,7 +311,8 @@ sys_rpccall(void)
   memset(reply, 0, sizeof(reply));
   reply_len = 0;
   if(icc_rpc_call((uint32)dst_ep, (uint32)cmd, payload, (uint32)plen,
-                  reply, (uint32)reply_max, &reply_len) < 0)
+                  reply, (uint32)reply_max, &reply_len,
+                  (uint32)timeout_ms) < 0)
     return -1;
 
   copy_len = reply_len;
@@ -318,4 +327,16 @@ sys_rpccall(void)
   }
 
   return copy_len;
+}
+
+uint64
+sys_rdtime(void)
+{
+  return r_time();
+}
+
+uint64
+sys_rdcycle(void)
+{
+  return r_cycle();
 }

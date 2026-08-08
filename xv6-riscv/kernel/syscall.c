@@ -47,6 +47,8 @@ argraw(int n)
     return p->trapframe->a4;
   case 5:
     return p->trapframe->a5;
+  case 6:
+    return p->trapframe->a6;
   }
   panic("argraw");
   return -1;
@@ -109,6 +111,8 @@ extern uint64 sys_shmemsend(void);
 extern uint64 sys_iccsend(void);
 extern uint64 sys_iccrecv(void);
 extern uint64 sys_rpccall(void);
+extern uint64 sys_rdtime(void);
+extern uint64 sys_rdcycle(void);
 
 // An array mapping syscall numbers from syscall.h
 // to the function that handles the system call.
@@ -142,6 +146,8 @@ static uint64 (*syscalls[])(void) = {
 [SYS_iccsend] sys_iccsend,
 [SYS_iccrecv] sys_iccrecv,
 [SYS_rpccall] sys_rpccall,
+[SYS_rdtime] sys_rdtime,
+[SYS_rdcycle] sys_rdcycle,
 };
 
 void

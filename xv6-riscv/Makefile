@@ -154,7 +154,8 @@ UPROGS=\
 	$U/_mailboxtest\
 	$U/_shmemtest\
 	$U/_icctest\
-	$U/_rpctest
+	$U/_rpctest\
+	$U/_benchtest
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)

@@ -67,11 +67,12 @@ void handle_interrupt(void)
         */
         uint32_t reason = mailbox_read_rx_from_xv6();
         mailbox_ack_to_rtos();
-        debug_log("mailbox irq received, reason=%x\n",
-                (unsigned long)reason);
 
         if (reason == SHMEM_DOORBELL_CH0) {
             icc_isr_drain_to_rtos();
+        } else {
+            debug_log("mailbox irq received, reason=%x\n",
+                      (unsigned long)reason);
         }
     } else {
         debug_log("plic: unknown irq %d\n", irq);

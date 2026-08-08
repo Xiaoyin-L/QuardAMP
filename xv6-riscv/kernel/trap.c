@@ -200,6 +200,7 @@ clockintr()
     ticks++;
     wakeup(&ticks);
     release(&tickslock);
+    icc_timeout_poll();
   }
 
   // ask for the next timer interrupt. this also clears
@@ -253,4 +254,3 @@ devintr()
     return 0;
   }
 }
-

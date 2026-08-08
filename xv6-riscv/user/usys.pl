@@ -50,3 +50,5 @@ entry("shmemsend");
 entry("iccsend");
 entry("iccrecv");
 entry("rpccall");
+entry("rdtime");
+entry("rdcycle");

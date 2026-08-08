@@ -94,4 +94,10 @@ SECTIONS
         . = ALIGN(16);
         PROVIDE(_sp = .);
     } > ram
+
+    /DISCARD/ :
+    {
+        *(.note*)
+        *(.comment*)
+    }
 }

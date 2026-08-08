@@ -40,8 +40,10 @@ int slabinfo(void*, int);
 int mailboxring(int);
 int shmemsend(int);
 int iccsend(int, int, char*, int, int);
-int iccrecv(int, char*, int);
-int rpccall(int, int, char*, int, char*, int);
+int iccrecv(int, char*, int, int);
+int rpccall(int, int, char*, int, char*, int, int);
+uint64 rdtime(void);
+uint64 rdcycle(void);
 
 // ulib.c
 int stat(const char*, struct stat*);

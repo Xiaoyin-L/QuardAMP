@@ -17,9 +17,27 @@ static SemaphoreHandle_t xIccSendMutex;
 static struct icc_handler_entry icc_handlers[ICC_MAX_HANDLERS];
 static uint16_t icc_to_rtos_last_avail;
 
+#ifndef ICC_VERBOSE
+#define ICC_VERBOSE 0
+#endif
+
+#if ICC_VERBOSE
+#define icc_trace(...) debug_log(__VA_ARGS__)
+#else
+#define icc_trace(...) do { } while (0)
+#endif
+
 static inline void icc_fence(void)
 {
     __asm__ volatile ("fence rw, rw" ::: "memory");
+}
+
+static inline uint64_t icc_rdtime(void)
+{
+    uint64_t value;
+
+    __asm__ volatile ("rdtime %0" : "=r" (value));
+    return value;
 }
 
 static unsigned int payload_len(const char *s)
@@ -203,7 +221,7 @@ int icc_register_handler(uint32_t ep, icc_handler_t handler)
         if (icc_handlers[i].handler == NULL) {
             icc_handlers[i].ep = ep;
             icc_handlers[i].handler = handler;
-            debug_log("rpmsg register: ep=%x slot=%d\n",
+            icc_trace("rpmsg register: ep=%x slot=%d\n",
                       (unsigned long)ep, i);
             return 0;
         }
@@ -413,7 +431,7 @@ void icc_echo_handler(struct icc_msg *msg)
     char payload[sizeof(msg->payload) + 1];
 
     payload_to_string(payload, sizeof(payload), msg);
-    debug_log("rpmsg echo: rx src=%x dst=%x cmd=%x cookie=%x payload=%s\n",
+    icc_trace("rpmsg echo: rx src=%x dst=%x cmd=%x cookie=%x payload=%s\n",
               (unsigned long)msg->src_ep, (unsigned long)msg->dst_ep,
               (unsigned long)msg->cmd, (unsigned long)msg->cookie, payload);
 
@@ -439,7 +457,7 @@ void icc_upper_handler(struct icc_msg *msg)
     uint32_t len = msg->len;
 
     payload_to_string(payload, sizeof(payload), msg);
-    debug_log("rpmsg upper: rx src=%x dst=%x cmd=%x cookie=%x payload=%s\n",
+    icc_trace("rpmsg upper: rx src=%x dst=%x cmd=%x cookie=%x payload=%s\n",
               (unsigned long)msg->src_ep, (unsigned long)msg->dst_ep,
               (unsigned long)msg->cmd, (unsigned long)msg->cookie, payload);
 
@@ -476,9 +494,53 @@ void icc_upper_handler(struct icc_msg *msg)
     }
 
     if (icc_message_send(reply) == 0) {
-        debug_log("rpmsg upper: reply sent cookie=%x\n",
+        icc_trace("rpmsg upper: reply sent cookie=%x\n",
                   (unsigned long)msg->cookie);
     }
+}
+
+void icc_bench_handler(struct icc_msg *msg)
+{
+    struct rpmsg_hdr *reply;
+    volatile struct rpmsg_app_hdr *app;
+    volatile uint8_t *data;
+    uint32_t echo_len = msg->len;
+    uint64_t t_rx = icc_rdtime();
+    uint64_t t_tx;
+
+    if (echo_len > SHMSG_PAYLOAD_SIZE - 16U) {
+        echo_len = SHMSG_PAYLOAD_SIZE - 16U;
+    }
+
+    reply = icc_message_loan(msg->src_ep);
+    if (reply == NULL) {
+        debug_log("rpmsg bench: loan failed\n");
+        return;
+    }
+
+    clear_volatile(reply, SHMEM_RPMSG_BUF_SIZE);
+    reply->src = SHMEM_EP_RTOS_BENCH;
+    reply->dst = msg->src_ep;
+    reply->reserved = 0;
+    reply->flags = 0;
+    reply->len = RPMSG_APP_HDR_SIZE + 16U + echo_len;
+
+    app = (volatile struct rpmsg_app_hdr *)reply->data;
+    app->cmd = msg->cmd;
+    app->cookie = msg->cookie;
+    app->flags = 0;
+    data = reply->data + RPMSG_APP_HDR_SIZE;
+
+    for (uint32_t i = 0; i < echo_len; i++) {
+        data[16U + i] = (uint8_t)msg->payload[i];
+    }
+    t_tx = icc_rdtime();
+    for (uint32_t i = 0; i < 8U; i++) {
+        data[i] = (uint8_t)(t_rx >> (i * 8U));
+        data[8U + i] = (uint8_t)(t_tx >> (i * 8U));
+    }
+
+    (void)icc_message_send(reply);
 }
 
 void vIccTestTask(void *p_arg)
@@ -491,6 +553,7 @@ void vIccTestTask(void *p_arg)
 
     icc_announce_service("rpmsg-echo", SHMEM_EP_RTOS_ECHO);
     icc_announce_service("quardamp-rpc", SHMEM_EP_RTOS_UPPER);
+    icc_announce_service("quardamp-bench", SHMEM_EP_RTOS_BENCH);
 
     msg = icc_message_loan(SHMEM_EP_XV6_TEST);
     if (msg == NULL) {

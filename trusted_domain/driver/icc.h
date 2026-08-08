@@ -35,5 +35,6 @@ void icc_echo_handler(struct icc_msg *msg);
  * and sends the transformed payload back to the xv6 source endpoint.
  */
 void icc_upper_handler(struct icc_msg *msg);
+void icc_bench_handler(struct icc_msg *msg);
 
 #endif /* ICC_H */

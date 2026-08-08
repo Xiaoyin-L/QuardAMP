@@ -35,7 +35,7 @@ main(int argc, char *argv[])
   }
 
   printf("icctest: sent, waiting for reply...\n");
-  n = iccrecv(SHMEM_EP_XV6_TEST, buf, SHMSG_PAYLOAD_SIZE);
+  n = iccrecv(SHMEM_EP_XV6_TEST, buf, SHMSG_PAYLOAD_SIZE, 2000);
   if(n < 0){
     printf("icctest: iccrecv failed\n");
     exit(1);
