@@ -99,6 +99,7 @@ static void vTaskCreate(void *p_arg)
 #endif
     xTaskCreate(vUartRxTask,"vUartRxTask",2048,NULL,5,NULL);
     xTaskCreate(vIccDispatchTask,"vIccDispatchTask",512,NULL,5,NULL);
+    xTaskCreate(vIccNsTask,"vIccNsTask",512,NULL,4,NULL);
 #if QUARDAMP_DEMO
     xTaskCreate(vIccTestTask,"vIccTestTask",512,NULL,4,NULL);
     xTaskCreate(vMailboxTestTask,"vMailboxTestTask",512,NULL,4,NULL);

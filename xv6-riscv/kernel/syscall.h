@@ -34,3 +34,4 @@
 #define SYS_rpccall   29
 #define SYS_rdtime    30
 #define SYS_rdcycle   31
+#define SYS_iccsendbatch 32

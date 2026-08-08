@@ -227,9 +227,7 @@ sys_iccrecv(void)
   int ep;
   int max_len;
   int timeout_ms;
-  int copy_len;
   uint64 buf_addr;
-  struct icc_msg msg;
 
   argint(0, &ep);
   argaddr(1, &buf_addr);
@@ -241,22 +239,50 @@ sys_iccrecv(void)
   if(timeout_ms < 0)
     timeout_ms = 0;
 
-  if(icc_recv((uint32)ep, &msg, (uint32)timeout_ms) < 0)
-    return -1;
+  return icc_recv_user((uint32)ep, myproc()->pagetable, buf_addr,
+                       (uint32)max_len, (uint32)timeout_ms);
+}
 
-  copy_len = msg.len;
-  if(copy_len > max_len)
-    copy_len = max_len;
-  if(copy_len > SHMSG_PAYLOAD_SIZE)
-    copy_len = SHMSG_PAYLOAD_SIZE;
+/*
+ * Batched ICC send syscall.
+ *
+ * This keeps each message as a normal rpmsg buffer, but publishes a group of
+ * descriptors before issuing one mailbox kick.  It gives the benchmark an
+ * explicit way to measure virtqueue-style notification coalescing.
+ */
+uint64
+sys_iccsendbatch(void)
+{
+  int dst_ep;
+  int cmd;
+  int len;
+  int base_cookie;
+  int count;
+  uint64 payload_addr;
+  char payload[SHMSG_PAYLOAD_SIZE];
 
-  if(copy_len > 0){
-    if(copyout(myproc()->pagetable, buf_addr, msg.payload,
-               (uint64)copy_len) < 0)
+  argint(0, &dst_ep);
+  argint(1, &cmd);
+  argaddr(2, &payload_addr);
+  argint(3, &len);
+  argint(4, &base_cookie);
+  argint(5, &count);
+
+  if(len < 0)
+    len = 0;
+  if(len > SHMSG_PAYLOAD_SIZE)
+    len = SHMSG_PAYLOAD_SIZE;
+  if(count < 0)
+    count = 0;
+
+  if(len > 0){
+    if(copyin(myproc()->pagetable, payload, payload_addr, len) < 0)
       return -1;
   }
 
-  return copy_len;
+  return icc_send_batch((uint32)dst_ep, (uint32)cmd, payload,
+                        (uint32)len, (uint32)base_cookie,
+                        (uint32)count);
 }
 
 /*

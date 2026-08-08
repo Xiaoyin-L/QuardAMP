@@ -26,6 +26,7 @@ void icc_prepare_app_message(struct rpmsg_hdr *hdr, uint32_t src_ep,
                              uint32_t len);
 void icc_isr_drain_to_rtos(void);
 void vIccDispatchTask(void *p_arg);
+void vIccNsTask(void *p_arg);
 void vIccTestTask(void *p_arg);
 void icc_echo_handler(struct icc_msg *msg);
 

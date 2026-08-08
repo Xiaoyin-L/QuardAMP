@@ -34,13 +34,20 @@
 #define icc_trace(...) do { } while(0)
 #endif
 
+struct icc_rx_item {
+  uint16 desc_id;
+  uint32 wire_len;
+  volatile uint8 *buf;
+  struct icc_msg msg;
+};
+
 struct icc_endpoint {
   uint32 ep;
   uint32 head;
   uint32 count;
   uint32 drops;
   uint32 deadline;
-  struct icc_msg queue[ICC_EP_QUEUE_DEPTH];
+  struct icc_rx_item queue[ICC_EP_QUEUE_DEPTH];
   struct spinlock lock;
 };
 
@@ -59,6 +66,9 @@ static struct icc_rpc_pending icc_rpc_table[ICC_RPC_MAX_PENDING];
 static struct spinlock icc_rpc_lock;
 static uint32 icc_rpc_next_cookie = 0x6000;
 static uint16 icc_to_xv6_last_avail;
+static uint16 icc_to_rtos_last_used;
+static uint16 icc_to_rtos_free[SHMSG_SLOT_NUM];
+static uint16 icc_to_rtos_free_count;
 
 static uint32
 icc_now_ticks(void)
@@ -103,16 +113,6 @@ icc_find_ep(uint32 ep)
 }
 
 static void
-copy_from_volatile(void *dst, volatile void *src, uint n)
-{
-  uint8 *d = (uint8*)dst;
-  volatile uint8 *s = (volatile uint8*)src;
-
-  for(uint i = 0; i < n; i++)
-    d[i] = s[i];
-}
-
-static void
 clear_volatile(volatile void *ptr, uint n)
 {
   volatile uint8 *p = (volatile uint8*)ptr;
@@ -122,52 +122,63 @@ clear_volatile(volatile void *ptr, uint n)
 }
 
 static void
-payload_to_string(char *dst, uint dst_size, struct icc_msg *msg)
+icc_rx_release_to_xv6(uint16 desc_id, uint32 len)
 {
-  uint len = msg->len;
+  uint16 used_idx = SHMEM_TO_XV6_USED->idx;
 
-  if(dst_size == 0)
-    return;
-  if(len >= dst_size)
-    len = dst_size - 1;
-  if(len > sizeof(msg->payload))
-    len = sizeof(msg->payload);
-
-  memmove(dst, msg->payload, len);
-  dst[len] = '\0';
+  SHMEM_TO_XV6_USED->ring[used_idx % SHMSG_SLOT_NUM].id = desc_id;
+  SHMEM_TO_XV6_USED->ring[used_idx % SHMSG_SLOT_NUM].len = len;
+  __sync_synchronize();
+  SHMEM_TO_XV6_USED->idx = used_idx + 1;
+  __sync_synchronize();
 }
 
 static void
-icc_drop_pending(uint32 ep)
+icc_tx_free_init(void)
 {
-  struct icc_endpoint *e = icc_find_ep(ep);
+  icc_to_rtos_last_used = 0;
+  icc_to_rtos_free_count = SHMSG_SLOT_NUM;
+  for(int i = 0; i < SHMSG_SLOT_NUM; i++)
+    icc_to_rtos_free[i] = i;
+}
 
-  if(e == 0)
-    return;
+/*
+ * Virtio split rings transfer descriptor ownership through the used ring:
+ * sender owns ids in its free list, receiver returns consumed ids in used[].
+ * Reclaim all newly used descriptors before checking for transmit space.
+ */
+static void
+icc_tx_reclaim_locked(void)
+{
+  while(icc_to_rtos_last_used != SHMEM_TO_RTOS_USED->idx){
+    uint16 id = SHMEM_TO_RTOS_USED->ring[
+      icc_to_rtos_last_used % SHMSG_SLOT_NUM].id;
 
-  acquire(&e->lock);
-  e->head = 0;
-  e->count = 0;
-  e->deadline = 0;
-  release(&e->lock);
+    if(id < SHMSG_SLOT_NUM && icc_to_rtos_free_count < SHMSG_SLOT_NUM)
+      icc_to_rtos_free[icc_to_rtos_free_count++] = id;
+    icc_to_rtos_last_used++;
+  }
 }
 
 static int
-rpmsg_decode_app(uint8 *wire, uint32 wire_len, struct icc_msg *out)
+rpmsg_decode_app(volatile uint8 *wire, uint32 wire_len, struct icc_msg *out,
+                 int copy_payload)
 {
-  struct rpmsg_hdr *hdr = (struct rpmsg_hdr*)wire;
-  struct rpmsg_app_hdr *app;
+  volatile struct rpmsg_hdr *hdr = (volatile struct rpmsg_hdr*)wire;
+  volatile struct rpmsg_app_hdr *app;
   uint32 payload_len;
+  uint16 hdr_len;
 
   if(wire_len < RPMSG_HDR_SIZE)
     return -1;
-  if(hdr->len < RPMSG_APP_HDR_SIZE)
+  hdr_len = hdr->len;
+  if(hdr_len < RPMSG_APP_HDR_SIZE)
     return -1;
-  if(RPMSG_HDR_SIZE + hdr->len > wire_len)
+  if(RPMSG_HDR_SIZE + hdr_len > wire_len)
     return -1;
 
-  app = (struct rpmsg_app_hdr*)hdr->data;
-  payload_len = hdr->len - RPMSG_APP_HDR_SIZE;
+  app = (volatile struct rpmsg_app_hdr*)hdr->data;
+  payload_len = hdr_len - RPMSG_APP_HDR_SIZE;
   if(payload_len > SHMSG_PAYLOAD_SIZE)
     payload_len = SHMSG_PAYLOAD_SIZE;
 
@@ -177,27 +188,40 @@ rpmsg_decode_app(uint8 *wire, uint32 wire_len, struct icc_msg *out)
   out->cookie = app->cookie;
   out->flags = app->flags;
   out->len = payload_len;
-  if(payload_len > 0)
-    memmove(out->payload, hdr->data + RPMSG_APP_HDR_SIZE, payload_len);
+  if(copy_payload){
+    volatile uint8 *payload = hdr->data + RPMSG_APP_HDR_SIZE;
+
+    for(uint32 i = 0; i < payload_len; i++)
+      out->payload[i] = payload[i];
+  }
   return 0;
 }
 
 static void
-rpmsg_handle_ns(uint8 *wire, uint32 wire_len)
+rpmsg_handle_ns(volatile uint8 *wire, uint32 wire_len)
 {
-  struct rpmsg_hdr *hdr = (struct rpmsg_hdr*)wire;
-  struct rpmsg_ns_msg *ns;
+  volatile struct rpmsg_hdr *hdr = (volatile struct rpmsg_hdr*)wire;
+  volatile struct rpmsg_ns_msg *ns;
   char name[RPMSG_NAME_SIZE + 1];
   uint32 len;
 
   if(wire_len < RPMSG_HDR_SIZE || hdr->len < sizeof(struct rpmsg_ns_msg))
     return;
 
-  ns = (struct rpmsg_ns_msg*)hdr->data;
+  ns = (volatile struct rpmsg_ns_msg*)hdr->data;
   len = RPMSG_NAME_SIZE;
-  memmove(name, ns->name, len);
+  for(uint32 i = 0; i < len; i++)
+    name[i] = ns->name[i];
   name[RPMSG_NAME_SIZE] = '\0';
   printf("rpmsg ns: %s addr=%x flags=%x\n", name, ns->addr, ns->flags);
+}
+
+static volatile uint8*
+rpmsg_payload(volatile uint8 *wire)
+{
+  volatile struct rpmsg_hdr *hdr = (volatile struct rpmsg_hdr*)wire;
+
+  return hdr->data + RPMSG_APP_HDR_SIZE;
 }
 
 static void
@@ -272,7 +296,7 @@ icc_rpc_free(struct icc_rpc_pending *p)
 }
 
 static int
-icc_rpc_try_match(struct icc_msg *msg, char *payload)
+icc_rpc_try_match(struct icc_msg *msg, volatile uint8 *payload)
 {
   for(int i = 0; i < ICC_RPC_MAX_PENDING; i++){
     struct icc_rpc_pending *p = &icc_rpc_table[i];
@@ -280,13 +304,14 @@ icc_rpc_try_match(struct icc_msg *msg, char *payload)
     acquire(&p->lock);
     if(p->in_use && p->cookie == msg->cookie){
       p->reply = *msg;
+      for(uint32 j = 0; j < msg->len; j++)
+        p->reply.payload[j] = payload[j];
       p->has_reply = 1;
       p->deadline = 0;
       wakeup(p);
       release(&p->lock);
 
-      icc_trace("rpmsg rx: rpc reply matched cookie=%x payload=%s\n",
-                msg->cookie, payload);
+      icc_trace("rpmsg rx: rpc reply matched cookie=%x\n", msg->cookie);
       return 1;
     }
     release(&p->lock);
@@ -320,6 +345,7 @@ icc_init(void)
   }
   initlock(&icc_rpc_lock, "icc_rpc_tbl");
   icc_to_xv6_last_avail = 0;
+  icc_tx_free_init();
 
   printf("rpmsg: init endpoints=%d local_ep=%x buf=%d payload=%d\n",
          ICC_MAX_ENDPOINTS, SHMEM_EP_XV6_TEST,
@@ -339,12 +365,11 @@ icc_notify_recv(uint32 reason)
 
   for(;;){
     uint16 avail_idx = SHMEM_TO_XV6_AVAIL->idx;
-    uint16 used_idx;
     uint16 desc_id;
     uint32 wire_len;
-    uint8 wire[SHMEM_RPMSG_BUF_SIZE];
+    uint32 tail;
     struct icc_msg msg;
-    char payload[SHMSG_PAYLOAD_SIZE + 1];
+    struct icc_rx_item item;
     struct icc_endpoint *e;
     volatile struct vring_desc *desc;
     volatile uint8 *buf;
@@ -365,70 +390,130 @@ icc_notify_recv(uint32 reason)
     buf = (volatile uint8*)desc->addr;
 
     __sync_synchronize();
-    copy_from_volatile(wire, buf, wire_len);
-
-    used_idx = SHMEM_TO_XV6_USED->idx;
-    SHMEM_TO_XV6_USED->ring[used_idx % SHMSG_SLOT_NUM].id = desc_id;
-    SHMEM_TO_XV6_USED->ring[used_idx % SHMSG_SLOT_NUM].len = desc->len;
-    __sync_synchronize();
-    SHMEM_TO_XV6_USED->idx = used_idx + 1;
-    __sync_synchronize();
     icc_to_xv6_last_avail++;
 
-    if(((struct rpmsg_hdr*)wire)->dst == RPMSG_NS_ADDR){
-      rpmsg_handle_ns(wire, wire_len);
+    if(((volatile struct rpmsg_hdr*)buf)->dst == RPMSG_NS_ADDR){
+      rpmsg_handle_ns(buf, wire_len);
+      icc_rx_release_to_xv6(desc_id, wire_len);
       continue;
     }
 
-    if(rpmsg_decode_app(wire, wire_len, &msg) < 0){
+    if(rpmsg_decode_app(buf, wire_len, &msg, 0) < 0){
       printf("rpmsg rx: bad buffer len=%d\n", wire_len);
+      icc_rx_release_to_xv6(desc_id, wire_len);
       continue;
     }
 
-    payload_to_string(payload, sizeof(payload), &msg);
-    if(icc_rpc_try_match(&msg, payload))
+    if(icc_rpc_try_match(&msg, rpmsg_payload(buf))){
+      icc_rx_release_to_xv6(desc_id, wire_len);
       continue;
+    }
 
     e = icc_find_ep(msg.dst_ep);
     if(e != 0){
-      uint32 tail;
-
       acquire(&e->lock);
       if(e->count == ICC_EP_QUEUE_DEPTH){
         e->drops++;
         printf("rpmsg rx: queue full ep=%x drops=%d cookie=%x\n",
                msg.dst_ep, e->drops, msg.cookie);
         release(&e->lock);
+        icc_rx_release_to_xv6(desc_id, wire_len);
         continue;
       }
       tail = (e->head + e->count) % ICC_EP_QUEUE_DEPTH;
-      e->queue[tail] = msg;
+      item.desc_id = desc_id;
+      item.wire_len = wire_len;
+      item.buf = buf;
+      item.msg = msg;
+      e->queue[tail] = item;
       e->count++;
       e->deadline = 0;
       wakeup(e);
       release(&e->lock);
 
-      icc_trace("rpmsg rx: ep=%x src=%x cmd=%x cookie=%x payload=%s\n",
-                msg.dst_ep, msg.src_ep, msg.cmd, msg.cookie, payload);
+      icc_trace("rpmsg rx: ep=%x src=%x cmd=%x cookie=%x queued desc=%d\n",
+                msg.dst_ep, msg.src_ep, msg.cmd, msg.cookie, desc_id);
     } else {
-      printf("rpmsg rx: no endpoint dst=%x src=%x cmd=%x cookie=%x payload=%s\n",
-             msg.dst_ep, msg.src_ep, msg.cmd, msg.cookie, payload);
+      printf("rpmsg rx: no endpoint dst=%x src=%x cmd=%x cookie=%x\n",
+             msg.dst_ep, msg.src_ep, msg.cmd, msg.cookie);
+      icc_rx_release_to_xv6(desc_id, wire_len);
     }
   }
+}
+
+static int
+icc_ready(void)
+{
+  return SHMEM_CTRL_BASE->magic == SHMEM_MAGIC &&
+         SHMEM_CTRL_BASE->version == SHMEM_VERSION;
+}
+
+static int
+icc_tx_loan_locked(uint16 *desc_id, volatile uint8 **buf)
+{
+  uint16 avail_idx;
+
+  icc_tx_reclaim_locked();
+  avail_idx = SHMEM_TO_RTOS_AVAIL->idx;
+  if(icc_to_rtos_free_count == 0){
+    printf("rpmsg tx: to_rtos free list empty avail=%d used=%d\n",
+           avail_idx, SHMEM_TO_RTOS_USED->idx);
+    return -1;
+  }
+
+  *desc_id = icc_to_rtos_free[--icc_to_rtos_free_count];
+  *buf = SHMEM_TO_RTOS_BUF_BASE + *desc_id * SHMEM_RPMSG_BUF_SIZE;
+  return 0;
+}
+
+static void
+icc_tx_commit_locked(uint16 desc_id, uint32 wire_len)
+{
+  uint16 avail_idx = SHMEM_TO_RTOS_AVAIL->idx;
+  volatile uint8 *buf = SHMEM_TO_RTOS_BUF_BASE +
+                        desc_id * SHMEM_RPMSG_BUF_SIZE;
+
+  SHMEM_TO_RTOS_DESC[desc_id].addr = (uint64)buf;
+  SHMEM_TO_RTOS_DESC[desc_id].len = wire_len;
+  SHMEM_TO_RTOS_DESC[desc_id].flags = 0;
+  SHMEM_TO_RTOS_DESC[desc_id].next = 0;
+
+  SHMEM_TO_RTOS_AVAIL->ring[avail_idx % SHMSG_SLOT_NUM] = desc_id;
+  __sync_synchronize();
+  SHMEM_TO_RTOS_AVAIL->idx = avail_idx + 1;
+  __sync_synchronize();
+}
+
+static int
+icc_send_locked(uint32 dst_ep, uint32 cmd, const char *payload, uint32 len,
+                uint32 cookie)
+{
+  uint16 desc_id;
+  uint32 wire_len;
+  volatile uint8 *buf;
+
+  /*
+   * Keep the xv6 TX side in the same shape as rpmsg: claim one outbound
+   * buffer, fill the rpmsg header in-place, then publish its descriptor.
+   */
+  if(icc_tx_loan_locked(&desc_id, &buf) < 0)
+    return -1;
+
+  rpmsg_make_app(buf, SHMEM_EP_XV6_TEST, dst_ep, cmd, payload, len, cookie,
+                 &wire_len);
+  icc_tx_commit_locked(desc_id, wire_len);
+  icc_trace("rpmsg tx: desc=%d dst=%x cmd=%x cookie=%x len=%d -> FreeRTOS\n",
+            desc_id, dst_ep, cmd, cookie, len);
+  return 0;
 }
 
 int
 icc_send(uint32 dst_ep, uint32 cmd, const char *payload, uint32 len,
          uint32 cookie)
 {
-  uint16 avail_idx;
-  uint16 used_idx;
-  uint16 desc_id;
-  uint32 wire_len;
-  volatile uint8 *buf;
+  int ret;
 
-  if(SHMEM_CTRL_BASE->magic != SHMEM_MAGIC ||
-     SHMEM_CTRL_BASE->version != SHMEM_VERSION){
+  if(!icc_ready()){
     printf("rpmsg tx: shmem not ready magic=%x version=%d\n",
            SHMEM_CTRL_BASE->magic, SHMEM_CTRL_BASE->version);
     return -1;
@@ -437,45 +522,57 @@ icc_send(uint32 dst_ep, uint32 cmd, const char *payload, uint32 len,
   if(len > SHMSG_PAYLOAD_SIZE)
     len = SHMSG_PAYLOAD_SIZE;
 
-  icc_drop_pending(SHMEM_EP_XV6_TEST);
   acquire(&icc_send_lock);
-
-  avail_idx = SHMEM_TO_RTOS_AVAIL->idx;
-  used_idx = SHMEM_TO_RTOS_USED->idx;
-  if((uint16)(avail_idx - used_idx) >= SHMSG_SLOT_NUM){
-    release(&icc_send_lock);
-    printf("rpmsg tx: to_rtos vring full avail=%d used=%d\n",
-           avail_idx, used_idx);
-    return -1;
-  }
-
-  desc_id = avail_idx % SHMSG_SLOT_NUM;
-  buf = SHMEM_TO_RTOS_BUF_BASE + desc_id * SHMEM_RPMSG_BUF_SIZE;
-  rpmsg_make_app(buf, SHMEM_EP_XV6_TEST, dst_ep, cmd, payload, len, cookie,
-                 &wire_len);
-
-  SHMEM_TO_RTOS_DESC[desc_id].addr = (uint64)buf;
-  SHMEM_TO_RTOS_DESC[desc_id].len = wire_len;
-  SHMEM_TO_RTOS_DESC[desc_id].flags = 0;
-  SHMEM_TO_RTOS_DESC[desc_id].next = 0;
-
-  SHMEM_TO_RTOS_AVAIL->ring[desc_id] = desc_id;
-  __sync_synchronize();
-  SHMEM_TO_RTOS_AVAIL->idx = avail_idx + 1;
-  __sync_synchronize();
-
+  ret = icc_send_locked(dst_ep, cmd, payload, len, cookie);
   release(&icc_send_lock);
 
-  icc_trace("rpmsg tx: desc=%d dst=%x cmd=%x cookie=%x len=%d -> FreeRTOS\n",
-            desc_id, dst_ep, cmd, cookie, len);
+  if(ret < 0)
+    return -1;
+
   mailbox_ring_to_rtos(SHMEM_DOORBELL_VRING_TO_RTOS);
   return 0;
+}
+
+int
+icc_send_batch(uint32 dst_ep, uint32 cmd, const char *payload, uint32 len,
+               uint32 base_cookie, uint32 count)
+{
+  uint32 sent = 0;
+
+  if(!icc_ready()){
+    printf("rpmsg tx batch: shmem not ready magic=%x version=%d\n",
+           SHMEM_CTRL_BASE->magic, SHMEM_CTRL_BASE->version);
+    return -1;
+  }
+  if(len > SHMSG_PAYLOAD_SIZE)
+    len = SHMSG_PAYLOAD_SIZE;
+  if(count > SHMSG_SLOT_NUM)
+    count = SHMSG_SLOT_NUM;
+
+  acquire(&icc_send_lock);
+  while(sent < count){
+    if(icc_send_locked(dst_ep, cmd, payload, len, base_cookie + sent) < 0)
+      break;
+    sent++;
+  }
+  release(&icc_send_lock);
+
+  /*
+   * Batch mode deliberately publishes N descriptors but sends one doorbell.
+   * The peer ISR drains avail.idx until it catches up, matching virtqueue
+   * notification coalescing without changing the per-buffer rpmsg format.
+   */
+  if(sent != 0)
+    mailbox_ring_to_rtos(SHMEM_DOORBELL_VRING_TO_RTOS);
+
+  return sent == 0 ? -1 : (int)sent;
 }
 
 int
 icc_recv(uint32 ep, struct icc_msg *out, uint32 timeout_ms)
 {
   struct icc_endpoint *e = icc_find_ep(ep);
+  struct icc_rx_item item;
   uint32 timeout_ticks;
   uint32 deadline = 0;
 
@@ -503,14 +600,77 @@ icc_recv(uint32 ep, struct icc_msg *out, uint32 timeout_ms)
     return -1;
   }
 
-  *out = e->queue[e->head];
+  item = e->queue[e->head];
   e->head = (e->head + 1) % ICC_EP_QUEUE_DEPTH;
   e->count--;
   if(e->count != 0)
     wakeup(e);
   e->deadline = 0;
   release(&e->lock);
+
+  *out = item.msg;
+  for(uint32 i = 0; i < out->len; i++)
+    out->payload[i] = rpmsg_payload(item.buf)[i];
+  icc_rx_release_to_xv6(item.desc_id, item.wire_len);
   return 0;
+}
+
+int
+icc_recv_user(uint32 ep, pagetable_t pagetable, uint64 buf_addr,
+              uint32 max_len, uint32 timeout_ms)
+{
+  struct icc_endpoint *e = icc_find_ep(ep);
+  struct icc_rx_item item;
+  uint32 timeout_ticks;
+  uint32 deadline = 0;
+  uint32 copy_len;
+  int ret = 0;
+
+  if(e == 0)
+    return -1;
+
+  timeout_ticks = icc_timeout_to_ticks(timeout_ms);
+  if(timeout_ticks != 0)
+    deadline = icc_now_ticks() + timeout_ticks;
+
+  acquire(&e->lock);
+  e->deadline = deadline;
+  while(e->count == 0 && !killed(myproc())){
+    if(icc_deadline_expired(deadline)){
+      e->deadline = 0;
+      release(&e->lock);
+      return -1;
+    }
+    sleep(e, &e->lock);
+  }
+
+  if(killed(myproc())){
+    e->deadline = 0;
+    release(&e->lock);
+    return -1;
+  }
+
+  item = e->queue[e->head];
+  e->head = (e->head + 1) % ICC_EP_QUEUE_DEPTH;
+  e->count--;
+  if(e->count != 0)
+    wakeup(e);
+  e->deadline = 0;
+  release(&e->lock);
+
+  copy_len = item.msg.len;
+  if(copy_len > max_len)
+    copy_len = max_len;
+  if(copy_len > SHMSG_PAYLOAD_SIZE)
+    copy_len = SHMSG_PAYLOAD_SIZE;
+
+  if(copy_len != 0 &&
+     copyout(pagetable, buf_addr, (char*)rpmsg_payload(item.buf),
+             (uint64)copy_len) < 0)
+    ret = -1;
+
+  icc_rx_release_to_xv6(item.desc_id, item.wire_len);
+  return ret < 0 ? -1 : (int)copy_len;
 }
 
 int

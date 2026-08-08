@@ -9,6 +9,8 @@
 #define BREAKDOWN_ITERS 200
 #define THROUGHPUT_ITERS 1000
 #define THROUGHPUT_PAYLOAD 64
+#define BURST_ITERS 512
+#define BURST_WINDOW 8
 
 static uint64 samples[THROUGHPUT_ITERS];
 static uint64 forward_samples[BREAKDOWN_ITERS];
@@ -196,22 +198,78 @@ test_throughput(void)
   return 0;
 }
 
+static int
+test_burst(void)
+{
+  int sent = 0;
+  int recvd = 0;
+  uint64 t0;
+  uint64 t1;
+  uint64 elapsed;
+  uint64 msg_per_sec;
+  uint64 kb_per_sec;
+
+  printf("\n--- Test 4: Batched In-Flight Throughput ---\n");
+  fill_payload(req, THROUGHPUT_PAYLOAD);
+
+  t0 = rdtime();
+  while(sent < BURST_ITERS){
+    int batch = BURST_WINDOW;
+    int n;
+
+    if(batch > BURST_ITERS - sent)
+      batch = BURST_ITERS - sent;
+
+    n = iccsendbatch(SHMEM_EP_RTOS_BENCH, SHMEM_CMD_BENCH, req,
+                     THROUGHPUT_PAYLOAD, 0x8000 + sent, batch);
+    if(n != batch){
+      printf("benchtest: batch send failed sent=%d requested=%d got=%d\n",
+             sent, batch, n);
+      return -1;
+    }
+    sent += batch;
+
+    for(int i = 0; i < batch; i++){
+      n = iccrecv(SHMEM_EP_XV6_TEST, reply, SHMSG_PAYLOAD_SIZE, TIMEOUT_MS);
+      if(n < 0){
+        printf("benchtest: batch recv failed recvd=%d\n", recvd);
+        return -1;
+      }
+      recvd++;
+    }
+  }
+  t1 = rdtime();
+
+  elapsed = t1 - t0;
+  msg_per_sec = ((uint64)BURST_ITERS * TIMEBASE_HZ) / elapsed;
+  kb_per_sec = ((uint64)BURST_ITERS * THROUGHPUT_PAYLOAD *
+                TIMEBASE_HZ) / elapsed / 1024;
+
+  printf("  batch-window: %d msgs (%dB each, window=%d) in %luus\n",
+         BURST_ITERS, THROUGHPUT_PAYLOAD, BURST_WINDOW, ticks_to_us(elapsed));
+  printf("  rate=%lu msg/s  bandwidth=%lu KB/s\n",
+         msg_per_sec, kb_per_sec);
+  return 0;
+}
+
 int
 main(int argc, char *argv[])
 {
   (void)argc;
   (void)argv;
 
-  printf("=== ICC Performance Benchmark (Stage 8) ===\n");
-  printf("timer_freq=%luHz, rtt_iters=%d, bp_iters=%d, tp_iters=%d, tp_payload=%dB\n",
+  printf("=== ICC Performance Benchmark (Stage 9) ===\n");
+  printf("timer_freq=%luHz, rtt_iters=%d, bp_iters=%d, tp_iters=%d, tp_payload=%dB, burst=%d/%d\n",
          (uint64)TIMEBASE_HZ, RTT_ITERS, BREAKDOWN_ITERS,
-         THROUGHPUT_ITERS, THROUGHPUT_PAYLOAD);
+         THROUGHPUT_ITERS, THROUGHPUT_PAYLOAD, BURST_ITERS, BURST_WINDOW);
 
   if(test_rtt() < 0)
     exit(1);
   if(test_breakdown() < 0)
     exit(1);
   if(test_throughput() < 0)
+    exit(1);
+  if(test_burst() < 0)
     exit(1);
 
   printf("\n=== Benchmark Complete ===\n");
