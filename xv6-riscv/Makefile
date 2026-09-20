@@ -34,6 +34,7 @@ OBJS = \
   $K/shmem.o \
   $K/icc.o \
   $K/mailbox.o \
+  $K/dma.o \
   $K/pci_accel.o
 
 # riscv64-unknown-elf- or riscv64-linux-gnu-

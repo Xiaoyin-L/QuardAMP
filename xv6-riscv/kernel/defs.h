@@ -211,6 +211,9 @@ void            virtio_disk_intr(void);
 void            mailbox_ring_to_rtos(uint32);
 void            mailboxintr(void);
 
+// dma.c
+void            dma_init(void);
+
 // pci_accel.c
 void            pcie_accel_init(void);
 void            pcie_accel_intr(void);

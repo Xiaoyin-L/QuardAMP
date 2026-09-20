@@ -4,6 +4,7 @@
 #include "riscv.h"
 #include "spinlock.h"
 #include "defs.h"
+#include "dma.h"
 
 #define QACC_VENDOR_ID 0x1efd
 #define QACC_DEVICE_ID 0xa001
@@ -46,11 +47,11 @@ struct qacc_state {
   volatile int irq_seen;
   uint32 irq_count;
   struct spinlock lock;
+  struct dma_buf src_dma;
+  struct dma_buf dst_dma;
 };
 
 static struct qacc_state qacc;
-static uchar qacc_src[QACC_TEST_LEN] __attribute__((aligned(64)));
-static uchar qacc_dst[QACC_TEST_LEN] __attribute__((aligned(64)));
 
 static volatile uint32*
 pci_cfg_addr(int bus, int dev, int func, int off)
@@ -186,9 +187,16 @@ pcie_accel_init(void)
     return;
   }
 
+  if(dma_alloc(&qacc.src_dma, QACC_TEST_LEN, DMA_CACHELINE_SIZE) < 0 ||
+     dma_alloc(&qacc.dst_dma, QACC_TEST_LEN, DMA_CACHELINE_SIZE) < 0){
+    printf("pcie-accel: DMA buffer allocation failed\n");
+    return;
+  }
+
   qacc.present = 1;
-  printf("pcie-accel: bdf=%d:%d.%d bar0=0x%lx msi=%d\n",
-         qacc.bus, qacc.dev, qacc.func, qacc.bar0, PCIE_ACCEL_MSI_IRQ);
+  printf("pcie-accel: bdf=%d:%d.%d bar0=0x%lx msi=%d dma_src=0x%lx dma_dst=0x%lx\n",
+         qacc.bus, qacc.dev, qacc.func, qacc.bar0, PCIE_ACCEL_MSI_IRQ,
+         qacc.src_dma.pa, qacc.dst_dma.pa);
 }
 
 void
@@ -210,24 +218,31 @@ int
 pcie_accel_selftest(void)
 {
   uint ticks0;
+  uchar cpu_src[QACC_TEST_LEN];
+  uchar cpu_dst[QACC_TEST_LEN];
 
   if(!qacc.present)
     return -1;
 
   for(int i = 0; i < QACC_TEST_LEN; i++){
-    qacc_src[i] = (uchar)i;
-    qacc_dst[i] = 0;
+    cpu_src[i] = (uchar)i;
+    cpu_dst[i] = 0;
   }
+
+  if(dma_bounce_to_device(&qacc.src_dma, cpu_src, QACC_TEST_LEN) < 0)
+    return -1;
+  memset(qacc.dst_dma.va, 0, qacc.dst_dma.size);
+  dma_sync_for_device(&qacc.dst_dma);
 
   acquire(&qacc.lock);
   qacc.irq_seen = 0;
   release(&qacc.lock);
 
   __sync_synchronize();
-  *qacc_reg(QACC_REG_SRC_LO) = (uint32)(uint64)qacc_src;
-  *qacc_reg(QACC_REG_SRC_HI) = (uint32)((uint64)qacc_src >> 32);
-  *qacc_reg(QACC_REG_DST_LO) = (uint32)(uint64)qacc_dst;
-  *qacc_reg(QACC_REG_DST_HI) = (uint32)((uint64)qacc_dst >> 32);
+  *qacc_reg(QACC_REG_SRC_LO) = (uint32)qacc.src_dma.pa;
+  *qacc_reg(QACC_REG_SRC_HI) = (uint32)(qacc.src_dma.pa >> 32);
+  *qacc_reg(QACC_REG_DST_LO) = (uint32)qacc.dst_dma.pa;
+  *qacc_reg(QACC_REG_DST_HI) = (uint32)(qacc.dst_dma.pa >> 32);
   *qacc_reg(QACC_REG_LEN) = QACC_TEST_LEN;
   *qacc_reg(QACC_REG_STATUS) = QACC_STATUS_DONE;
   *qacc_reg(QACC_REG_CMD) = QACC_CMD_RUN | QACC_CMD_IRQ;
@@ -256,16 +271,19 @@ pcie_accel_selftest(void)
     release(&tickslock);
   }
 
+  if(dma_bounce_from_device(cpu_dst, &qacc.dst_dma, QACC_TEST_LEN) < 0)
+    return -1;
+
   for(int i = 0; i < QACC_TEST_LEN; i++){
-    uchar expected = qacc_src[i] ^ 0x5a;
-    if(qacc_dst[i] != expected){
+    uchar expected = cpu_src[i] ^ 0x5a;
+    if(cpu_dst[i] != expected){
       printf("pcie-accel: mismatch byte %d got=%x expected=%x\n",
-             i, qacc_dst[i], expected);
+             i, cpu_dst[i], expected);
       return -1;
     }
   }
 
-  printf("pcie-accel: selftest ok len=%d irq_count=%d\n",
+  printf("pcie-accel: selftest ok len=%d irq_count=%d bounce=on\n",
          QACC_TEST_LEN, qacc.irq_count);
   return 0;
 }

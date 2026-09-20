@@ -25,6 +25,7 @@ main()
     printf("\n");
     kinit();         // physical page allocator
     slab_init();     // small object allocator
+    dma_init();      // fixed carveout for PCIe DMA bounce buffers
     kvminit();       // create kernel page table
     kvminithart();   // turn on paging
     shmem_init();

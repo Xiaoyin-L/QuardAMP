@@ -91,7 +91,17 @@
  * 如果 KERNBASE 和实际加载地址不一致，页表映射会指向错误的物理页 
  */
 #define KERNBASE 0x82000000L
-#define PHYSTOP (KERNBASE + 128*1024*1024)
+#define RAMTOP (KERNBASE + 128*1024*1024)
+
+// Stage 2 PCIe DMA carveout.
+// The normal page allocator stops at PHYSTOP, so this top-of-RAM region is
+// reserved for device-visible bounce buffers managed by kernel/dma.c.
+#define DMA_CARVEOUT_SIZE (1024 * 1024)
+#define DMA_CARVEOUT_BASE (RAMTOP - DMA_CARVEOUT_SIZE)
+#define DMA_CARVEOUT_END  RAMTOP
+#define DMA_CACHELINE_SIZE 64
+
+#define PHYSTOP DMA_CARVEOUT_BASE
 
 // map the trampoline page to the highest address,
 // in both user and kernel space.
