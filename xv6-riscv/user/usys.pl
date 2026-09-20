@@ -53,3 +53,4 @@ entry("rpccall");
 entry("rdtime");
 entry("rdcycle");
 entry("iccsendbatch");
+entry("pcieacceltest");

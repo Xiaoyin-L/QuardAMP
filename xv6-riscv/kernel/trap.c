@@ -235,6 +235,8 @@ devintr()
       // 必须在本函数末尾 plic_complete() 之前完成，
       // 否则 complete 后设备中断条件仍在会造成中断风暴。
       mailboxintr();
+    } else if(irq == PCIE_ACCEL_MSI_IRQ){
+      pcie_accel_intr();
     } else if(irq){
       printf("unexpected interrupt irq=%d\n", irq);
     }

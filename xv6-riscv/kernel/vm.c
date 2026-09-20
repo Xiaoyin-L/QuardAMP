@@ -35,8 +35,12 @@ kvmmake(void)
   // AMP mailbox doorbell registers (quardamp-mailbox, 阶段 1 单向 doorbell)
   kvmmap(kpgtbl, MAILBOX, MAILBOX, PGSIZE, PTE_R | PTE_W);
 
-  // PLIC
-  kvmmap(kpgtbl, PLIC, PLIC, 0x4000000, PTE_R | PTE_W);
+  // S-level APLIC
+  kvmmap(kpgtbl, APLIC_S, APLIC_S, 0x8000, PTE_R | PTE_W);
+
+  // PCIe ECAM config space and the phase-1 accelerator BAR0 window.
+  kvmmap(kpgtbl, PCIE_ECAM, PCIE_ECAM, PCIE_ECAM_SIZE, PTE_R | PTE_W);
+  kvmmap(kpgtbl, PCIE_MMIO, PCIE_MMIO, PCIE_MMIO_SIZE, PTE_R | PTE_W);
 
   // map kernel text executable and read-only.
   kvmmap(kpgtbl, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);

@@ -18,9 +18,16 @@
 #define CSR_SSTATUS 0x100
 #define CSR_SIE 0x104
 #define CSR_STVEC 0x105
+#define CSR_SISELECT 0x150
+#define CSR_SIREG 0x151
+#define CSR_STOPEI 0x15c
 #define CSR_SEPC 0x141
 #define CSR_SCAUSE 0x142
 #define CSR_STVAL 0x143
 #define CSR_SIP 0x144
+
+#define IMSIC_EIDELIVERY  0x70
+#define IMSIC_EITHRESHOLD 0x72
+#define IMSIC_EIE0        0xc0
 
 #endif

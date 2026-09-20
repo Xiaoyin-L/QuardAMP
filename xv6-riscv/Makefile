@@ -33,7 +33,8 @@ OBJS = \
   $K/virtio_disk.o \
   $K/shmem.o \
   $K/icc.o \
-  $K/mailbox.o
+  $K/mailbox.o \
+  $K/pci_accel.o
 
 # riscv64-unknown-elf- or riscv64-linux-gnu-
 # perhaps in /opt/riscv/bin
@@ -155,7 +156,8 @@ UPROGS=\
 	$U/_shmemtest\
 	$U/_icctest\
 	$U/_rpctest\
-	$U/_benchtest
+	$U/_benchtest\
+	$U/_pcietest
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)

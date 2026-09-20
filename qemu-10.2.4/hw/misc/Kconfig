@@ -11,6 +11,10 @@ config ARMSSE_MHU
 config QUARDAMP_MAILBOX
     bool
 
+config QUARDAMP_ACCEL
+    bool
+    depends on PCI && MSI_NONBROKEN
+
 config ARMSSE_CPU_PWRCTRL
     bool
 

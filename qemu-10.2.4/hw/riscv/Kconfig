@@ -71,12 +71,17 @@ config RISCV_VIRT
 
 config QUARD_STAR
     bool
+    imply PCI_DEVICES
     select SERIAL
+    select PCI
+    select PCI_EXPRESS_GENERIC_BRIDGE
     select RISCV_ACLINT
-    select SIFIVE_PLIC
+    select RISCV_APLIC
+    select RISCV_IMSIC
     select PFLASH_CFI01
     select VIRTIO_MMIO
     select QUARDAMP_MAILBOX
+    select QUARDAMP_ACCEL
 
     
 config SHAKTI_C

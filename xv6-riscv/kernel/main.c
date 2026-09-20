@@ -38,6 +38,7 @@ main()
     iinit();         // inode table
     fileinit();      // file table
     virtio_disk_init(); // emulated hard disk
+    pcie_accel_init();  // phase-1 PCIe accelerator
     userinit();      // first user process
     __sync_synchronize();
     started = 1;

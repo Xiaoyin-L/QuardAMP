@@ -10,13 +10,17 @@
 #include "hw/qdev-properties.h"
 #include "hw/char/serial.h"
 #include "hw/char/serial-mm.h"
+#include "hw/pci/pci.h"
+#include "hw/pci-host/gpex.h"
 #include "target/riscv/cpu.h"
 #include "hw/riscv/riscv_hart.h"
 #include "hw/riscv/quard_star.h"
 #include "hw/riscv/boot.h"
 #include "hw/riscv/numa.h"
 #include "hw/intc/riscv_aclint.h"
-#include "hw/intc/sifive_plic.h"
+#include "hw/intc/riscv_aplic.h"
+#include "hw/intc/riscv_imsic.h"
+#include "target/riscv/cpu_bits.h"
 #include "chardev/char.h"
 #include "system/arch_init.h"
 #include "system/device_tree.h" 
@@ -35,7 +39,9 @@ static const MemMapEntry virt_memmap[] = {
     [QUARD_STAR_MROM]  = {        0x0,        0x8000 },
     [QUARD_STAR_SRAM]  = {     0x8000,        0x8000 },
     [QUARD_STAR_CLINT]  = { 0x2000000,         0x10000 },
-    [QUARD_STAR_PLIC]   = { 0xc000000, QUARD_STAR_PLIC_SIZE(QUARD_STAR_CPUS_MAX * 2) },
+    [QUARD_STAR_APLIC_M] = { 0x0c000000, APLIC_SIZE(QUARD_STAR_CPUS_MAX) },
+    [QUARD_STAR_APLIC_S] = { 0x0d000000, APLIC_SIZE(QUARD_STAR_CPUS_MAX) },
+    [QUARD_STAR_PCIE_PIO] = { 0x03000000, 0x10000 },
     [QUARD_STAR_UART0] = { 0x10000000,         0x100 },
     [QUARD_STAR_VIRTIO] = { 0x10001000,        0x1000},
     [QUARD_STAR_UART1] = { 0x10003000,         0x100 },
@@ -46,6 +52,10 @@ static const MemMapEntry virt_memmap[] = {
      */
     [QUARD_STAR_MAILBOX] = { 0x10004000,  QUARDAMP_MAILBOX_SIZE },
     [QUARD_STAR_FLASH] = { 0x20000000,         0x2000000 },
+    [QUARD_STAR_IMSIC_M] = { 0x24000000, QUARD_STAR_IMSIC_GROUP_MAX_SIZE },
+    [QUARD_STAR_IMSIC_S] = { 0x28000000, QUARD_STAR_IMSIC_GROUP_MAX_SIZE },
+    [QUARD_STAR_PCIE_ECAM] = { 0x30000000, 0x10000000 },
+    [QUARD_STAR_PCIE_MMIO] = { 0x40000000, 0x40000000 },
     [QUARD_STAR_DRAM]  = { 0x80000000,           0x0 },
 };
 
@@ -144,6 +154,123 @@ static void quard_star_setup_rom_reset_vec(MachineState *machine, RISCVHartArray
                           rom_base, &address_space_memory);
 }
 
+static DeviceState *quard_star_create_aia(const MemMapEntry *memmap,
+                                          int socket, int base_hartid,
+                                          int hart_count)
+{
+    DeviceState *aplic_m;
+    hwaddr addr;
+    int i;
+
+    addr = memmap[QUARD_STAR_IMSIC_M].base +
+           socket * QUARD_STAR_IMSIC_GROUP_MAX_SIZE;
+    for (i = 0; i < hart_count; i++) {
+        riscv_imsic_create(addr + i * IMSIC_HART_SIZE(0),
+                           base_hartid + i, true, 1,
+                           QUARD_STAR_IRQCHIP_NUM_MSIS);
+    }
+
+    addr = memmap[QUARD_STAR_IMSIC_S].base +
+           socket * QUARD_STAR_IMSIC_GROUP_MAX_SIZE;
+    for (i = 0; i < hart_count; i++) {
+        riscv_imsic_create(addr + i * IMSIC_HART_SIZE(0),
+                           base_hartid + i, false, 1,
+                           QUARD_STAR_IRQCHIP_NUM_MSIS);
+    }
+
+    aplic_m = riscv_aplic_create(memmap[QUARD_STAR_APLIC_M].base +
+                                 socket * memmap[QUARD_STAR_APLIC_M].size,
+                                 memmap[QUARD_STAR_APLIC_M].size,
+                                 0, 0,
+                                 QUARD_STAR_IRQCHIP_NUM_SOURCES,
+                                 QUARD_STAR_IRQCHIP_NUM_PRIO_BITS,
+                                 true, true, NULL);
+    riscv_aplic_create(memmap[QUARD_STAR_APLIC_S].base +
+                       socket * memmap[QUARD_STAR_APLIC_S].size,
+                       memmap[QUARD_STAR_APLIC_S].size,
+                       0, 0,
+                       QUARD_STAR_IRQCHIP_NUM_SOURCES,
+                       QUARD_STAR_IRQCHIP_NUM_PRIO_BITS,
+                       true, false, aplic_m);
+
+    return aplic_m;
+}
+
+static DeviceState *quard_star_pcie_init(MemoryRegion *sys_mem,
+                                         DeviceState *irqchip,
+                                         RISCVVirtState *s)
+{
+    DeviceState *dev = qdev_new(TYPE_GPEX_HOST);
+    MemoryRegion *ecam_alias, *ecam_reg;
+    MemoryRegion *mmio_alias, *mmio_reg;
+    MemoryRegion *pio_alias, *pio_reg;
+    PCIBus *bus;
+
+    object_property_set_uint(OBJECT(dev), PCI_HOST_ECAM_BASE,
+                             virt_memmap[QUARD_STAR_PCIE_ECAM].base,
+                             &error_fatal);
+    object_property_set_int(OBJECT(dev), PCI_HOST_ECAM_SIZE,
+                            virt_memmap[QUARD_STAR_PCIE_ECAM].size,
+                            &error_fatal);
+    object_property_set_uint(OBJECT(dev), PCI_HOST_BELOW_4G_MMIO_BASE,
+                             virt_memmap[QUARD_STAR_PCIE_MMIO].base,
+                             &error_fatal);
+    object_property_set_int(OBJECT(dev), PCI_HOST_BELOW_4G_MMIO_SIZE,
+                            virt_memmap[QUARD_STAR_PCIE_MMIO].size,
+                            &error_fatal);
+    object_property_set_uint(OBJECT(dev), PCI_HOST_ABOVE_4G_MMIO_BASE, 0,
+                             &error_fatal);
+    object_property_set_int(OBJECT(dev), PCI_HOST_ABOVE_4G_MMIO_SIZE, 0,
+                            &error_fatal);
+    object_property_set_uint(OBJECT(dev), PCI_HOST_PIO_BASE,
+                             virt_memmap[QUARD_STAR_PCIE_PIO].base,
+                             &error_fatal);
+    object_property_set_int(OBJECT(dev), PCI_HOST_PIO_SIZE,
+                            virt_memmap[QUARD_STAR_PCIE_PIO].size,
+                            &error_fatal);
+
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+
+    ecam_alias = g_new0(MemoryRegion, 1);
+    ecam_reg = sysbus_mmio_get_region(SYS_BUS_DEVICE(dev), 0);
+    memory_region_init_alias(ecam_alias, OBJECT(dev), "pcie-ecam",
+                             ecam_reg, 0, virt_memmap[QUARD_STAR_PCIE_ECAM].size);
+    memory_region_add_subregion(get_system_memory(),
+                                virt_memmap[QUARD_STAR_PCIE_ECAM].base,
+                                ecam_alias);
+
+    mmio_alias = g_new0(MemoryRegion, 1);
+    mmio_reg = sysbus_mmio_get_region(SYS_BUS_DEVICE(dev), 1);
+    memory_region_init_alias(mmio_alias, OBJECT(dev), "pcie-mmio",
+                             mmio_reg, virt_memmap[QUARD_STAR_PCIE_MMIO].base,
+                             virt_memmap[QUARD_STAR_PCIE_MMIO].size);
+    memory_region_add_subregion(sys_mem,
+                                virt_memmap[QUARD_STAR_PCIE_MMIO].base,
+                                mmio_alias);
+
+    pio_alias = g_new0(MemoryRegion, 1);
+    pio_reg = sysbus_mmio_get_region(SYS_BUS_DEVICE(dev), 2);
+    memory_region_init_alias(pio_alias, OBJECT(dev), "pcie-pio",
+                             pio_reg, 0, virt_memmap[QUARD_STAR_PCIE_PIO].size);
+    memory_region_add_subregion(sys_mem,
+                                virt_memmap[QUARD_STAR_PCIE_PIO].base,
+                                pio_alias);
+
+    for (int i = 0; i < PCI_NUM_PINS; i++) {
+        sysbus_connect_irq(SYS_BUS_DEVICE(dev), i,
+                           qdev_get_gpio_in(DEVICE(irqchip),
+                                            QUARD_STAR_PCIE_IRQ + i));
+        gpex_set_irq_num(GPEX_HOST(dev), i, QUARD_STAR_PCIE_IRQ + i);
+    }
+
+    s->gpex_host = GPEX_HOST(dev);
+    GPEX_HOST(dev)->gpex_cfg.bus = PCI_HOST_BRIDGE(dev)->bus;
+    bus = PCI_HOST_BRIDGE(dev)->bus;
+    pci_create_simple(bus, PCI_DEVFN(1, 0), "quardamp-accel");
+
+    return dev;
+}
+
 
 static void quad_star_board_init(MachineState *machine)
 {
@@ -154,10 +281,9 @@ static void quad_star_board_init(MachineState *machine)
     MemoryRegion *sram_mem = g_new(MemoryRegion, 1);   // 分配 SRAM 内存区域对象
     MemoryRegion *mask_rom = g_new(MemoryRegion, 1);   // 分配 Mask ROM 内存区域对象
     
-    int i, j, base_hartid, hart_count;
-    char *soc_name, *plic_hart_config; //PLIC 中断配置字符串
-    size_t plic_hart_config_len; // 配置字符串长度
-    DeviceState *mmio_plic=NULL; //PLIC实例指针    
+    int i, base_hartid, hart_count;
+    char *soc_name;
+    DeviceState *mmio_irqchip = NULL;
 
     /* Check socket count limit */
     if (QUARD_STAR_SOCKETS_MAX  < riscv_socket_count(machine)) {
@@ -210,35 +336,11 @@ static void quad_star_board_init(MachineState *machine)
             RISCV_ACLINT_DEFAULT_MTIMECMP, RISCV_ACLINT_DEFAULT_MTIME,
             RISCV_ACLINT_DEFAULT_TIMEBASE_FREQ, true);
 
-        plic_hart_config_len =
-            (strlen(QUARD_STAR_PLIC_HART_CONFIG) + 1) * hart_count;
-        plic_hart_config = g_malloc0(plic_hart_config_len);
-        for (j = 0; j < hart_count; j++) {
-            if (j != 0) {
-                strncat(plic_hart_config, ",", plic_hart_config_len);
-            }
-            strncat(plic_hart_config, QUARD_STAR_PLIC_HART_CONFIG,
-                plic_hart_config_len);
-            plic_hart_config_len -= (strlen(QUARD_STAR_PLIC_HART_CONFIG) + 1);
-        }
+        s->irqchip[i] = quard_star_create_aia(memmap, i,
+                                              base_hartid, hart_count);
 
-        s->plic[i] = sifive_plic_create(
-            memmap[QUARD_STAR_PLIC].base + i * memmap[QUARD_STAR_PLIC].size,
-            plic_hart_config, hart_count, base_hartid,
-            QUARD_STAR_PLIC_NUM_SOURCES,
-            QUARD_STAR_PLIC_NUM_PRIORITIES,
-            QUARD_STAR_PLIC_PRIORITY_BASE,
-            QUARD_STAR_PLIC_PENDING_BASE,
-            QUARD_STAR_PLIC_ENABLE_BASE,
-            QUARD_STAR_PLIC_ENABLE_STRIDE,
-            QUARD_STAR_PLIC_CONTEXT_BASE,
-            QUARD_STAR_PLIC_CONTEXT_STRIDE,
-            memmap[QUARD_STAR_PLIC].size);
-        g_free(plic_hart_config);
-
-         // 如果是第一个 Socket，则将PLIC对象保存到 mmio_plic 中
         if (i == 0) {
-            mmio_plic = s->plic[i];
+            mmio_irqchip = s->irqchip[i];
         }
     }
 
@@ -268,20 +370,22 @@ static void quad_star_board_init(MachineState *machine)
                               0x0, 0x0);
 
     serial_mm_init(system_memory, memmap[QUARD_STAR_UART0].base,
-        0, qdev_get_gpio_in(DEVICE(mmio_plic), QUARD_STAR_UART0_IRQ), 399193,
+        0, qdev_get_gpio_in(DEVICE(mmio_irqchip), QUARD_STAR_UART0_IRQ), 399193,
         serial_hd(0), DEVICE_LITTLE_ENDIAN);
     serial_mm_init(system_memory, memmap[QUARD_STAR_UART1].base,
-        0, qdev_get_gpio_in(DEVICE(mmio_plic), QUARD_STAR_UART1_IRQ), 399193,
+        0, qdev_get_gpio_in(DEVICE(mmio_irqchip), QUARD_STAR_UART1_IRQ), 399193,
         serial_hd(1), DEVICE_LITTLE_ENDIAN);
     serial_mm_init(system_memory, memmap[QUARD_STAR_UART2].base,
-        0, qdev_get_gpio_in(DEVICE(mmio_plic), QUARD_STAR_UART2_IRQ), 399193,
+        0, qdev_get_gpio_in(DEVICE(mmio_irqchip), QUARD_STAR_UART2_IRQ), 399193,
         serial_hd(2), DEVICE_LITTLE_ENDIAN);
 
     sysbus_create_simple(
         "virtio-mmio",
         memmap[QUARD_STAR_VIRTIO].base,
-        qdev_get_gpio_in(DEVICE(mmio_plic), QUARD_STAR_VIRTIO_IRQ)
+        qdev_get_gpio_in(DEVICE(mmio_irqchip), QUARD_STAR_VIRTIO_IRQ)
     );
+
+    quard_star_pcie_init(system_memory, mmio_irqchip, s);
 
     /* board_init() 中，virtio 实例化之后新增： */
 
@@ -297,11 +401,11 @@ static void quad_star_board_init(MachineState *machine)
                     memmap[QUARD_STAR_MAILBOX].base);
     sysbus_connect_irq(SYS_BUS_DEVICE(mailbox_dev),
                        QUARDAMP_MAILBOX_IRQ_TO_RTOS,
-                       qdev_get_gpio_in(DEVICE(mmio_plic),
+                       qdev_get_gpio_in(DEVICE(mmio_irqchip),
                                         QUARD_STAR_MAILBOX_TO_RTOS_IRQ));
     sysbus_connect_irq(SYS_BUS_DEVICE(mailbox_dev),
                        QUARDAMP_MAILBOX_IRQ_TO_XV6,
-                       qdev_get_gpio_in(DEVICE(mmio_plic),
+                       qdev_get_gpio_in(DEVICE(mmio_irqchip),
                                         QUARD_STAR_MAILBOX_TO_XV6_IRQ));
 
     s->flash = quard_star_flash_create(s, "quard-star.flash0", "pflash0");

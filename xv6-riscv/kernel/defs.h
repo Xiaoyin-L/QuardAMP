@@ -211,6 +211,11 @@ void            virtio_disk_intr(void);
 void            mailbox_ring_to_rtos(uint32);
 void            mailboxintr(void);
 
+// pci_accel.c
+void            pcie_accel_init(void);
+void            pcie_accel_intr(void);
+int             pcie_accel_selftest(void);
+
 // shmem.c
 void            shmem_init(void);
 int             shmem_send_to_rtos(uint32);

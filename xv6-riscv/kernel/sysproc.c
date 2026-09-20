@@ -285,6 +285,12 @@ sys_iccsendbatch(void)
                         (uint32)count);
 }
 
+uint64
+sys_pcieacceltest(void)
+{
+  return pcie_accel_selftest();
+}
+
 /*
  * Stage 6 RPC syscall.
  *

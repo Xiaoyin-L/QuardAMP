@@ -34,10 +34,45 @@
 				order = <64>;
 			};
 
-			tplic: tplic {
+			taplic_s: taplic_s {
 				compatible = "opensbi,domain,memregion";
-				base = <0x0 0x0c000000>;
-				order = <22>; /* 4 MiB，覆盖 PLIC 0x0c000000-0x0c3fffff */
+				base = <0x0 0x0d000000>;
+				order = <15>; /* 32 KiB，覆盖 S-mode APLIC */
+				mmio;
+			};
+
+			timsic_s7: timsic_s7 {
+				compatible = "opensbi,domain,memregion";
+				base = <0x0 0x28007000>;
+				order = <12>; /* hart7 的 S-mode IMSIC page */
+				mmio;
+			};
+
+			uaplic_s: uaplic_s {
+				compatible = "opensbi,domain,memregion";
+				base = <0x0 0x0d000000>;
+				order = <15>; /* 32 KiB，覆盖 S-mode APLIC */
+				mmio;
+			};
+
+			uimsic_s0_3: uimsic_s0_3 {
+				compatible = "opensbi,domain,memregion";
+				base = <0x0 0x28000000>;
+				order = <14>; /* hart0~3 的 S-mode IMSIC pages */
+				mmio;
+			};
+
+			uimsic_s4_5: uimsic_s4_5 {
+				compatible = "opensbi,domain,memregion";
+				base = <0x0 0x28004000>;
+				order = <13>; /* hart4~5 的 S-mode IMSIC pages */
+				mmio;
+			};
+
+			uimsic_s6: uimsic_s6 {
+				compatible = "opensbi,domain,memregion";
+				base = <0x0 0x28006000>;
+				order = <12>; /* hart6 的 S-mode IMSIC page */
 				mmio;
 			};
 
@@ -67,7 +102,7 @@
 				compatible = "opensbi,domain,instance";  /* 节点名称 */
 				possible-harts = <&cpu7>; /* domain中允许使用的cpu core */
 				/* 给某个 domain 配它能访问哪些内存/MMIO 区域，以及访问权限。 */
-				regions = <&tmem 0x38>, <&tuart 0x18>, <&tplic 0x18>, <&tmailbox 0x18>;/* OpenSBI权限位: bit[3:5]为S/U读写执行权限 */
+				regions = <&tmem 0x38>, <&tuart 0x18>, <&taplic_s 0x18>, <&timsic_s7 0x18>, <&tmailbox 0x18>;/* OpenSBI权限位: bit[3:5]为S/U读写执行权限 */
 				boot-hart = <&cpu7>; /* domain中用于boot的core */
 				next-arg1 = <0x0 0x00000000>; /* 下级程序的参数 */
 				next-addr = <0x0 0xb0000000>; /* 下级程序的起始地址 */
@@ -78,7 +113,7 @@
 			udomain: untrusted-domain {
 				compatible = "opensbi,domain,instance";
 				possible-harts = <&cpu0 &cpu1 &cpu2 &cpu3 &cpu4 &cpu5 &cpu6>;
-				regions = <&tmem 0x0>, <&tuart 0x0>, <&allmem 0x38>, <&sdmem 0x18>;
+				regions = <&tmem 0x0>, <&tuart 0x0>, <&allmem 0x38>, <&sdmem 0x18>, <&uaplic_s 0x18>, <&uimsic_s0_3 0x18>, <&uimsic_s4_5 0x18>, <&uimsic_s6 0x18>;
 				boot-hart = <&cpu0>;
 				next-arg1 = <0x0 0x82200000>;
 				next-addr = <0x0 0x82000000>;
@@ -115,7 +150,7 @@
 			status = "okay";      /* status属性用来表示启用该设备 */   
 			compatible = "riscv";
 			opensbi-domain = <&udomain>;
-			riscv,isa = "rv64imafdcsu_svadu";
+			riscv,isa = "rv64imafdcsu_svadu_smaia_ssaia";
 			mmu-type = "riscv,sv48";
 
 			interrupt-controller { /* 定义中断控制器子节点 */   
@@ -139,7 +174,7 @@
 			status = "okay";      /* status属性用来表示启用该设备 */   
 			compatible = "riscv";
 			opensbi-domain = <&udomain>;
-			riscv,isa = "rv64imafdcsu_svadu";
+			riscv,isa = "rv64imafdcsu_svadu_smaia_ssaia";
 			mmu-type = "riscv,sv48";
 
 			interrupt-controller { /* 定义中断控制器子节点 */   
@@ -157,7 +192,7 @@
 			status = "okay";      
 			compatible = "riscv";
 			opensbi-domain = <&udomain>;
-			riscv,isa = "rv64imafdcsu_svadu";
+			riscv,isa = "rv64imafdcsu_svadu_smaia_ssaia";
 			mmu-type = "riscv,sv48";
 
 			interrupt-controller { 
@@ -175,7 +210,7 @@
 			status = "okay";
 			compatible = "riscv";
 			opensbi-domain = <&udomain>;
-			riscv,isa = "rv64imafdcsu_svadu";
+			riscv,isa = "rv64imafdcsu_svadu_smaia_ssaia";
 			mmu-type = "riscv,sv48";
 
 			interrupt-controller {
@@ -193,7 +228,7 @@
 			status = "okay";
 			compatible = "riscv";
 			opensbi-domain = <&udomain>;
-			riscv,isa = "rv64imafdcsu_svadu";
+			riscv,isa = "rv64imafdcsu_svadu_smaia_ssaia";
 			mmu-type = "riscv,sv48";
 
 			interrupt-controller {
@@ -211,7 +246,7 @@
 			status = "okay";
 			compatible = "riscv";
 			opensbi-domain = <&udomain>;
-			riscv,isa = "rv64imafdcsu_svadu";
+			riscv,isa = "rv64imafdcsu_svadu_smaia_ssaia";
 			mmu-type = "riscv,sv48";
 
 			interrupt-controller {
@@ -229,7 +264,7 @@
 			status = "okay";
 			compatible = "riscv";
 			opensbi-domain = <&udomain>;
-			riscv,isa = "rv64imafdcsu_svadu";
+			riscv,isa = "rv64imafdcsu_svadu_smaia_ssaia";
 			mmu-type = "riscv,sv48";
 
 			interrupt-controller {
@@ -247,7 +282,7 @@
 			status = "okay";
 			compatible = "riscv";
 			opensbi-domain = <&tdomain>;
-			riscv,isa = "rv64imafdcsu_svadu";
+			riscv,isa = "rv64imafdcsu_svadu_smaia_ssaia";
 			mmu-type = "riscv,sv48";
 
 			interrupt-controller {
@@ -313,44 +348,81 @@
          * 用于设备驱动的具体的设备属性
          * 需要结合驱动源码确认属性如何使用 
         */
-        uart0: uart0@10000000 {
-			interrupts = <0xa>; /* 该设备连接到 PLIC 的中断号 10（0xa 是十六进制）由QEMU 模拟硬件定义 */
-			interrupt-parent = <0x11>; /* 通过引用指向中断控制器节点的ID，声明串口产生的中断是发给 PLIC 中断控制器的 */
+	        uart0: uart0@10000000 {
+			interrupts = <0xa 0x4>; /* APLIC source 10, level-high */
+			interrupt-parent = <0x14>;
 			clock-frequency = <0x384000>;
 			reg = <0x0 0x10000000 0x0 0x100>;
 			compatible = "ns16550a";
 		};
 
-        uart1: uart1@10003000 {
-			interrupts = <0xb>;
-			interrupt-parent = <0x11>;
+	        uart1: uart1@10003000 {
+			interrupts = <0xb 0x4>;
+			interrupt-parent = <0x14>;
 			clock-frequency = <0x384000>;
 			reg = <0x0 0x10003000 0x0 0x100>;
 			compatible = "ns16550a";
 		};
 
-        uart2: uart2@10002000 {
-			interrupts = <0xc>;
-			interrupt-parent = <0x11>;
+	        uart2: uart2@10002000 {
+			interrupts = <0xc 0x4>;
+			interrupt-parent = <0x14>;
 			clock-frequency = <0x384000>;
 			reg = <0x0 0x10002000 0x0 0x100>;
 			compatible = "ns16550a";
 		};
 
-        plic@c000000 {
-			phandle = <0x11>;
-			riscv,ndev = <0x35>; /* 0x35 即十进制的 53，表示支持 53 个外部中断源 */
-			reg = <0x0 0xc000000 0x0 0x210000>;
-            /* 描述了 PLIC 的中断输出如何连接到各个 CPU 核心 
-             * <CPU中断控制器句柄 中断号>。每对都表示一条连接路径
-             * <0x10 0xb>：0x10 是 CPU0 中断控制器的 phandle，0xb（11）表示连接到了 CPU 的 S-Mode（监管模式）外部中断。
-             * <0x10 0x9>：同样连接 CPU0，但 0x9 表示连接到 M-Mode（机器模式）外部中断。
-            */
-			interrupts-extended = <0x10 0xb 0x10 0x9 0xe 0xb 0xe 0x9 0xc 0xb 0xc 0x9 0xa 0xb 0xa 0x9 0x8 0xb 0x8 0x9 0x6 0xb 0x6 0x9 0x4 0xb 0x4 0x9 0x2 0xb 0x2 0x9>;
+        imsic_m: interrupt-controller@24000000 {
+			compatible = "qemu,imsics", "riscv,imsics";
+			#interrupt-cells = <0x0>;
 			interrupt-controller;
-			compatible = "riscv,plic0";
-			#interrupt-cells = <0x1>;
+			msi-controller;
+			interrupts-extended = <0x10 0xb 0xe 0xb 0xc 0xb 0xa 0xb 0x8 0xb 0x6 0xb 0x4 0xb 0x2 0xb>;
+			reg = <0x0 0x24000000 0x0 0x8000>;
+			riscv,num-ids = <0xff>;
+			riscv,hart-index-bits = <0x3>;
+			riscv,group-index-bits = <0x0>;
+			riscv,group-index-shift = <0x18>;
+			phandle = <0x12>;
+		};
+
+        imsic_s: interrupt-controller@28000000 {
+			compatible = "qemu,imsics", "riscv,imsics";
+			#interrupt-cells = <0x0>;
+			interrupt-controller;
+			msi-controller;
+			interrupts-extended = <0x10 0x9 0xe 0x9 0xc 0x9 0xa 0x9 0x8 0x9 0x6 0x9 0x4 0x9 0x2 0x9>;
+			reg = <0x0 0x28000000 0x0 0x8000>;
+			riscv,num-ids = <0xff>;
+			riscv,hart-index-bits = <0x3>;
+			riscv,group-index-bits = <0x0>;
+			riscv,group-index-shift = <0x18>;
+			phandle = <0x13>;
+		};
+
+        aplic_m: interrupt-controller@c000000 {
+			compatible = "qemu,aplic", "riscv,aplic";
 			#address-cells = <0x0>;
+			#interrupt-cells = <0x2>;
+			interrupt-controller;
+			msi-parent = <0x12>;
+			reg = <0x0 0x0c000000 0x0 0x8000>;
+			riscv,num-sources = <0x7f>;
+			riscv,children = <0x14>;
+			riscv,delegation = <0x14 0x1 0x7f>;
+			riscv,delegate = <0x14 0x1 0x7f>;
+			phandle = <0x11>;
+		};
+
+        aplic_s: interrupt-controller@d000000 {
+			compatible = "qemu,aplic", "riscv,aplic";
+			#address-cells = <0x0>;
+			#interrupt-cells = <0x2>;
+			interrupt-controller;
+			msi-parent = <0x13>;
+			reg = <0x0 0x0d000000 0x0 0x8000>;
+			riscv,num-sources = <0x7f>;
+			phandle = <0x14>;
 		};
 
         /* CLINT 负责管理每个 CPU 核心私有的、内部产生的中断，主要包括软件中断（IPI）和定时器中断。 */
@@ -365,8 +437,8 @@
 		virtio_mmio@10001000 {
 			compatible = "virtio,mmio";
 			reg = <0x0 0x10001000 0x0 0x1000>;
-			interrupt-parent = <0x11>;
-			interrupts = <0x1>; /* 使用 PLIC 中断源 1 */
+			interrupt-parent = <0x14>;
+			interrupts = <0x1 0x4>; /* APLIC source 1, level-high */
 		};
 
 		/*
@@ -381,8 +453,8 @@
 		mailbox: mailbox@10004000 {
 			compatible = "quardamp,mailbox";
 			reg = <0x0 0x10004000 0x0 0x20>;
-			interrupt-parent = <0x11>;
-			interrupts = <0xd 0xe>;
+			interrupt-parent = <0x14>;
+			interrupts = <0xd 0x4 0xe 0x4>;
 		};
 
 		shmem: shmem@b2000000 {

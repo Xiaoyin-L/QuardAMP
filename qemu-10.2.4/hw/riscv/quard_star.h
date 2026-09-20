@@ -5,6 +5,7 @@
 #include "hw/sysbus.h"
 #include "qom/object.h"
 #include "hw/block/flash.h"
+#include "hw/pci-host/gpex.h"
 
 #define QUARD_STAR_CPUS_MAX 8
 #define QUARD_STAR_SOCKETS_MAX 8
@@ -20,7 +21,8 @@ struct RISCVVirtState {
 
     /*< public >*/
     RISCVHartArrayState soc[QUARD_STAR_SOCKETS_MAX];
-    DeviceState *plic[QUARD_STAR_SOCKETS_MAX];
+    DeviceState *irqchip[QUARD_STAR_SOCKETS_MAX];
+    GPEXHost *gpex_host;
     PFlashCFI01 *flash;
 };
 
@@ -28,13 +30,19 @@ enum {
     QUARD_STAR_MROM,
     QUARD_STAR_SRAM,
     QUARD_STAR_CLINT,
-    QUARD_STAR_PLIC,
+    QUARD_STAR_APLIC_M,
+    QUARD_STAR_APLIC_S,
+    QUARD_STAR_IMSIC_M,
+    QUARD_STAR_IMSIC_S,
+    QUARD_STAR_PCIE_PIO,
     QUARD_STAR_UART0,
     QUARD_STAR_UART1,
     QUARD_STAR_UART2,
     QUARD_STAR_VIRTIO,   // 新增：VirtIO 设备的 memmap 索引
     QUARD_STAR_MAILBOX,  // 新增：AMP mailbox 设备的 memmap 索引
     QUARD_STAR_FLASH,
+    QUARD_STAR_PCIE_ECAM,
+    QUARD_STAR_PCIE_MMIO,
     QUARD_STAR_DRAM,
 };
 
@@ -51,18 +59,12 @@ enum {
      */
     QUARD_STAR_MAILBOX_TO_RTOS_IRQ = 13,
     QUARD_STAR_MAILBOX_TO_XV6_IRQ  = 14,
+    QUARD_STAR_PCIE_IRQ = 32,
 };
 
-#define QUARD_STAR_PLIC_HART_CONFIG    "MS"
-#define QUARD_STAR_PLIC_NUM_SOURCES    127
-#define QUARD_STAR_PLIC_NUM_PRIORITIES 7
-#define QUARD_STAR_PLIC_PRIORITY_BASE  0x0
-#define QUARD_STAR_PLIC_PENDING_BASE   0x1000
-#define QUARD_STAR_PLIC_ENABLE_BASE    0x2000
-#define QUARD_STAR_PLIC_ENABLE_STRIDE  0x80
-#define QUARD_STAR_PLIC_CONTEXT_BASE   0x200000
-#define QUARD_STAR_PLIC_CONTEXT_STRIDE 0x1000
-#define QUARD_STAR_PLIC_SIZE(__num_context) \
-    (QUARD_STAR_PLIC_CONTEXT_BASE + (__num_context) * QUARD_STAR_PLIC_CONTEXT_STRIDE)
+#define QUARD_STAR_IRQCHIP_NUM_SOURCES 127
+#define QUARD_STAR_IRQCHIP_NUM_MSIS    255
+#define QUARD_STAR_IRQCHIP_NUM_PRIO_BITS 3
+#define QUARD_STAR_IMSIC_GROUP_MAX_SIZE (1UL << 24)
 
 #endif

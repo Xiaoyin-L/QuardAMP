@@ -93,6 +93,38 @@ w_sie(uint64 x)
   asm volatile("csrw sie, %0" : : "r" (x));
 }
 
+#define IMSIC_EIDELIVERY  0x70
+#define IMSIC_EITHRESHOLD 0x72
+#define IMSIC_EIE0        0xc0
+
+static inline uint64
+r_sireg()
+{
+  uint64 x;
+  asm volatile("csrr %0, 0x151" : "=r" (x));
+  return x;
+}
+
+static inline void
+w_siselect(uint64 x)
+{
+  asm volatile("csrw 0x150, %0" : : "r" (x));
+}
+
+static inline void
+w_sireg(uint64 x)
+{
+  asm volatile("csrw 0x151, %0" : : "r" (x));
+}
+
+static inline uint64
+r_stopei_claim()
+{
+  uint64 x;
+  asm volatile("csrrw %0, 0x15c, zero" : "=r" (x) : : "memory");
+  return x;
+}
+
 // Machine-mode Interrupt Enable
 #define MIE_STIE (1L << 5)  // supervisor timer
 static inline uint64

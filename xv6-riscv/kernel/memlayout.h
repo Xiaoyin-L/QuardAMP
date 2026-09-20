@@ -25,13 +25,18 @@
 #define VIRTIO0 0x10001000
 #define VIRTIO0_IRQ 1
 
-// qemu puts platform-level interrupt controller (PLIC) here.
-#define PLIC 0x0c000000L
-#define PLIC_PRIORITY (PLIC + 0x0)
-#define PLIC_PENDING (PLIC + 0x1000)
-#define PLIC_SENABLE(hart) (PLIC + 0x2080 + (hart)*0x100)
-#define PLIC_SPRIORITY(hart) (PLIC + 0x201000 + (hart)*0x2000)
-#define PLIC_SCLAIM(hart) (PLIC + 0x201004 + (hart)*0x2000)
+// RISC-V AIA interrupt controllers.
+// External device lines enter the S-level APLIC and are delivered as
+// MSIs to each hart's S-level IMSIC.
+#define APLIC_S 0x0d000000L
+#define APLIC_DOMAINCFG      (APLIC_S + 0x0000)
+#define APLIC_SOURCECFG(irq) (APLIC_S + 0x0004 + ((irq) - 1) * 4)
+#define APLIC_SETIENUM       (APLIC_S + 0x1edc)
+#define APLIC_TARGET(irq)    (APLIC_S + 0x3004 + ((irq) - 1) * 4)
+#define APLIC_DOMAINCFG_IE   (1 << 8)
+#define APLIC_DOMAINCFG_DM   (1 << 2)
+#define APLIC_SOURCECFG_SM_LEVEL_HIGH 0x6
+#define APLIC_TARGET_HART_IDX_SHIFT 18
 
 // AMP mailbox (quardamp-mailbox) doorbell device.
 // 地址与 PLIC 源编号必须与 QEMU hw/riscv/quard_star.c、
@@ -46,6 +51,13 @@
 #define MAILBOX_IRQ_MASK     (MAILBOX + 0x14)
 #define MAILBOX_TO_RTOS_IRQ 13
 #define MAILBOX_TO_XV6_IRQ  14
+
+#define PCIE_ECAM 0x30000000L
+#define PCIE_ECAM_SIZE 0x100000L
+#define PCIE_MMIO 0x40000000L
+#define PCIE_MMIO_SIZE 0x10000L
+#define PCIE_ACCEL_BAR0 PCIE_MMIO
+#define PCIE_ACCEL_MSI_IRQ 32
 
 // STATUS / ack 位定义（与 QEMU hw/misc/quardamp_mailbox.c 一致）。
 // ack 采用 W1C：向 RX 寄存器写对应位 1 清 pending。

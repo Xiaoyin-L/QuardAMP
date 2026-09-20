@@ -5,49 +5,77 @@
 #include "defs.h"
 
 //
-// the riscv Platform Level Interrupt Controller (PLIC).
+// RISC-V AIA compatibility layer.
+// The public names stay plic_* so the rest of xv6 can migrate gradually.
 //
+
+static void
+imsic_write(uint64 reg, uint64 val)
+{
+  w_siselect(reg);
+  w_sireg(val);
+}
+
+static uint64
+imsic_read(uint64 reg)
+{
+  w_siselect(reg);
+  return r_sireg();
+}
+
+static void
+imsic_enable_irq(int irq)
+{
+  uint64 mask = 1L << irq;
+
+  imsic_write(IMSIC_EIE0, imsic_read(IMSIC_EIE0) | mask);
+}
+
+static void
+aplic_setup_source(int irq, int hart)
+{
+  *(volatile uint32*)APLIC_SOURCECFG(irq) = APLIC_SOURCECFG_SM_LEVEL_HIGH;
+  *(volatile uint32*)APLIC_TARGET(irq) =
+    ((uint32)hart << APLIC_TARGET_HART_IDX_SHIFT) | (uint32)irq;
+  *(volatile uint32*)APLIC_SETIENUM = (uint32)irq;
+}
 
 void
 plicinit(void)
 {
-  // set desired IRQ priorities non-zero (otherwise disabled).
-  *(uint32*)(PLIC + UART0_IRQ*4) = 1;
-  *(uint32*)(PLIC + VIRTIO0_IRQ*4) = 1;
-  // 阶段 2：mailbox FreeRTOS -> xv6 方向 doorbell（PLIC 源 14）。
-  // priority=0 时 PLIC 视该 source 为禁用，中断永不投递。
-  *(uint32*)(PLIC + MAILBOX_TO_XV6_IRQ*4) = 1;
+  // Keep shared device interrupts on hart0 for the first AIA bring-up.
+  aplic_setup_source(UART0_IRQ, 0);
+  aplic_setup_source(VIRTIO0_IRQ, 0);
+  aplic_setup_source(MAILBOX_TO_XV6_IRQ, 0);
 }
 
 void
 plicinithart(void)
 {
   int hart = cpuid();
-  
-  // set enable bits for this hart's S-mode
-  // for the uart and virtio disk.
-  // 源 14 在所有 xv6 hart(0~6) 的 S-mode context 都使能，
-  // PLIC 仲裁后只会投递给其中一个 context，与 UART0 行为一致。
-  *(uint32*)PLIC_SENABLE(hart) = (1 << UART0_IRQ) | (1 << VIRTIO0_IRQ)
-                                 | (1 << MAILBOX_TO_XV6_IRQ);
 
-  // set this hart's S-mode priority threshold to 0.
-  *(uint32*)PLIC_SPRIORITY(hart) = 0;
+  imsic_write(IMSIC_EITHRESHOLD, 0);
+  imsic_write(IMSIC_EIDELIVERY, 1);
+
+  if(hart == 0){
+    imsic_enable_irq(UART0_IRQ);
+    imsic_enable_irq(VIRTIO0_IRQ);
+    imsic_enable_irq(MAILBOX_TO_XV6_IRQ);
+    imsic_enable_irq(PCIE_ACCEL_MSI_IRQ);
+  }
 }
 
 // ask the PLIC what interrupt we should serve.
 int
 plic_claim(void)
 {
-  int hart = cpuid();
-  int irq = *(uint32*)PLIC_SCLAIM(hart);
-  return irq;
+  uint64 topei = r_stopei_claim();
+  return (int)((topei >> 16) & 0x7ff);
 }
 
 // tell the PLIC we've served this IRQ.
 void
 plic_complete(int irq)
 {
-  int hart = cpuid();
-  *(uint32*)PLIC_SCLAIM(hart) = irq;
+  (void)irq;
 }
