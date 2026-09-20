@@ -159,7 +159,8 @@ UPROGS=\
 	$U/_icctest\
 	$U/_rpctest\
 	$U/_benchtest\
-	$U/_pcietest
+	$U/_pcietest\
+	$U/_pciebench
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)

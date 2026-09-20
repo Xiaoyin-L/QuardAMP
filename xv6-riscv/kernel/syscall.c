@@ -115,6 +115,7 @@ extern uint64 sys_rdtime(void);
 extern uint64 sys_rdcycle(void);
 extern uint64 sys_iccsendbatch(void);
 extern uint64 sys_pcieacceltest(void);
+extern uint64 sys_pcieaccelbench(void);
 
 // An array mapping syscall numbers from syscall.h
 // to the function that handles the system call.
@@ -152,6 +153,7 @@ static uint64 (*syscalls[])(void) = {
 [SYS_rdcycle] sys_rdcycle,
 [SYS_iccsendbatch] sys_iccsendbatch,
 [SYS_pcieacceltest] sys_pcieacceltest,
+[SYS_pcieaccelbench] sys_pcieaccelbench,
 };
 
 void

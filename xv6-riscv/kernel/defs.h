@@ -219,8 +219,10 @@ void            iommu_init(void);
 
 // pci_accel.c
 void            pcie_accel_init(void);
-void            pcie_accel_intr(void);
+void            pcie_accel_intr(int);
 int             pcie_accel_selftest(void);
+struct pcie_accel_bench_result;
+int             pcie_accel_benchmark(struct pcie_accel_bench_result*);
 
 // shmem.c
 void            shmem_init(void);

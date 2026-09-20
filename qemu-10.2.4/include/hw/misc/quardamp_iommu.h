@@ -8,9 +8,11 @@
 #define QUARDAMP_IOMMU_PERM_READ  0x1U
 #define QUARDAMP_IOMMU_PERM_WRITE 0x2U
 
-bool quardamp_iommu_translate(uint64_t iova, uint32_t len,
+bool quardamp_iommu_translate(uint32_t domain, uint64_t iova, uint32_t len,
                               uint32_t perm, uint64_t *pa);
 uint32_t quardamp_iommu_status(void);
+uint32_t quardamp_iommu_domain_status(uint32_t domain);
 uint64_t quardamp_iommu_fault_addr(void);
+uint64_t quardamp_iommu_domain_fault_addr(uint32_t domain);
 
 #endif

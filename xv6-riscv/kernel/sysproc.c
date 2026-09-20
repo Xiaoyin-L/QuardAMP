@@ -8,6 +8,7 @@
 #include "vm.h"
 #include "slab.h"
 #include "shmem.h"
+#include "pcie_accel.h"
 
 uint64
 sys_exit(void)
@@ -289,6 +290,21 @@ uint64
 sys_pcieacceltest(void)
 {
   return pcie_accel_selftest();
+}
+
+uint64
+sys_pcieaccelbench(void)
+{
+  uint64 result_addr;
+  struct pcie_accel_bench_result result;
+
+  argaddr(0, &result_addr);
+  if(pcie_accel_benchmark(&result) < 0)
+    return -1;
+  if(copyout(myproc()->pagetable, result_addr, (char*)&result,
+             sizeof(result)) < 0)
+    return -1;
+  return 0;
 }
 
 /*

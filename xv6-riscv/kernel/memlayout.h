@@ -58,9 +58,12 @@
 #define PCIE_ECAM 0x30000000L
 #define PCIE_ECAM_SIZE 0x100000L
 #define PCIE_MMIO 0x40000000L
-#define PCIE_MMIO_SIZE 0x10000L
+#define PCIE_MMIO_SIZE 0x20000L
 #define PCIE_ACCEL_BAR0 PCIE_MMIO
+#define PCIE_ACCEL_MSIX_BAR (PCIE_MMIO + 0x10000L)
 #define PCIE_ACCEL_MSI_IRQ 32
+#define PCIE_ACCEL_MSIX_IRQ0 32
+#define PCIE_ACCEL_MSIX_IRQ1 33
 
 // STATUS / ack 位定义（与 QEMU hw/misc/quardamp_mailbox.c 一致）。
 // ack 采用 W1C：向 RX 寄存器写对应位 1 清 pending。

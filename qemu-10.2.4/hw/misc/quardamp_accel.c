@@ -2,6 +2,7 @@
 #include "qemu/units.h"
 #include "hw/pci/pci.h"
 #include "hw/pci/msi.h"
+#include "hw/pci/msix.h"
 #include "hw/misc/quardamp_iommu.h"
 #include "qemu/module.h"
 #include "qom/object.h"
@@ -29,6 +30,10 @@ OBJECT_DECLARE_SIMPLE_TYPE(QuardAmpAccelState, QUARDAMP_ACCEL)
 #define QACC_REG_MAP_PERM   0x44
 #define QACC_REG_FAULT_LO   0x48
 #define QACC_REG_FAULT_HI   0x4c
+#define QACC_REG_QUEUE_SEL  0x50
+#define QACC_REG_QUEUE_DOMAIN 0x54
+#define QACC_REG_QUEUE_VECTOR 0x58
+#define QACC_REG_QUEUE_COUNT 0x5c
 
 #define QACC_MAGIC          0x51414343U /* QACC */
 #define QACC_STATUS_DONE    0x1U
@@ -42,15 +47,22 @@ OBJECT_DECLARE_SIMPLE_TYPE(QuardAmpAccelState, QUARDAMP_ACCEL)
 #define QACC_IOMMU_FAULT    0x1U
 #define QACC_MAP_READ       0x1U
 #define QACC_MAP_WRITE      0x2U
+#define QACC_QUEUE_COUNT    2U
+#define QACC_MSIX_BAR       4U
+
+typedef struct QAccQueue {
+    uint32_t status;
+    uint64_t src;
+    uint64_t dst;
+    uint32_t len;
+    uint32_t domain;
+    uint32_t vector;
+} QAccQueue;
 
 struct QuardAmpAccelState {
     PCIDevice parent_obj;
     MemoryRegion bar0;
-    uint32_t status;
     uint32_t irq_status;
-    uint64_t src;
-    uint64_t dst;
-    uint32_t len;
     uint32_t iommu_ctrl;
     uint32_t iommu_status;
     uint64_t iova_base;
@@ -58,12 +70,23 @@ struct QuardAmpAccelState {
     uint64_t map_len;
     uint32_t map_perm;
     uint64_t fault_addr;
+    uint32_t queue_sel;
+    QAccQueue queues[QACC_QUEUE_COUNT];
 };
 
-static void qacc_raise_irq(QuardAmpAccelState *s)
+static QAccQueue *qacc_selected_queue(QuardAmpAccelState *s)
 {
-    s->irq_status |= QACC_IRQ_DONE;
-    if (msi_enabled(&s->parent_obj)) {
+    return &s->queues[s->queue_sel % QACC_QUEUE_COUNT];
+}
+
+static void qacc_raise_irq(QuardAmpAccelState *s, uint32_t queue)
+{
+    QAccQueue *q = &s->queues[queue % QACC_QUEUE_COUNT];
+
+    s->irq_status |= 1U << (queue % QACC_QUEUE_COUNT);
+    if (msix_enabled(&s->parent_obj)) {
+        msix_notify(&s->parent_obj, q->vector % QACC_QUEUE_COUNT);
+    } else if (msi_enabled(&s->parent_obj)) {
         msi_notify(&s->parent_obj, 0);
     } else {
         pci_set_irq(&s->parent_obj, 1);
@@ -79,7 +102,8 @@ static void qacc_lower_irq(QuardAmpAccelState *s, uint32_t mask)
 }
 
 static bool qacc_translate(QuardAmpAccelState *s, uint64_t iova,
-                           uint32_t len, uint32_t perm, uint64_t *pa)
+                           uint32_t len, uint32_t perm, uint32_t domain,
+                           uint64_t *pa)
 {
     uint32_t qperm = 0;
 
@@ -90,9 +114,9 @@ static bool qacc_translate(QuardAmpAccelState *s, uint64_t iova,
         qperm |= QUARDAMP_IOMMU_PERM_WRITE;
     }
 
-    if (!quardamp_iommu_translate(iova, len, qperm, pa)) {
+    if (!quardamp_iommu_translate(domain, iova, len, qperm, pa)) {
         s->iommu_status |= QACC_IOMMU_FAULT;
-        s->fault_addr = quardamp_iommu_fault_addr();
+        s->fault_addr = quardamp_iommu_domain_fault_addr(domain);
         return false;
     }
     return true;
@@ -101,7 +125,9 @@ static bool qacc_translate(QuardAmpAccelState *s, uint64_t iova,
 static void qacc_run(QuardAmpAccelState *s, uint32_t cmd)
 {
     uint8_t buf[QACC_MAX_XFER];
-    uint32_t len = s->len;
+    uint32_t queue = s->queue_sel % QACC_QUEUE_COUNT;
+    QAccQueue *q = &s->queues[queue];
+    uint32_t len = q->len;
     uint64_t src_pa;
     uint64_t dst_pa;
 
@@ -109,13 +135,13 @@ static void qacc_run(QuardAmpAccelState *s, uint32_t cmd)
         len = QACC_MAX_XFER;
     }
 
-    s->status = QACC_STATUS_BUSY;
+    q->status = QACC_STATUS_BUSY;
     if (len) {
-        if (!qacc_translate(s, s->src, len, QACC_MAP_READ, &src_pa) ||
-            !qacc_translate(s, s->dst, len, QACC_MAP_WRITE, &dst_pa)) {
-            s->status = QACC_STATUS_DONE | QACC_STATUS_FAULT;
+        if (!qacc_translate(s, q->src, len, QACC_MAP_READ, q->domain, &src_pa) ||
+            !qacc_translate(s, q->dst, len, QACC_MAP_WRITE, q->domain, &dst_pa)) {
+            q->status = QACC_STATUS_DONE | QACC_STATUS_FAULT;
             if (cmd & QACC_CMD_IRQ) {
-                qacc_raise_irq(s);
+                qacc_raise_irq(s, queue);
             }
             return;
         }
@@ -126,16 +152,17 @@ static void qacc_run(QuardAmpAccelState *s, uint32_t cmd)
         }
         pci_dma_write(&s->parent_obj, dst_pa, buf, len);
     }
-    s->status = QACC_STATUS_DONE;
+    q->status = QACC_STATUS_DONE;
 
     if (cmd & QACC_CMD_IRQ) {
-        qacc_raise_irq(s);
+        qacc_raise_irq(s, queue);
     }
 }
 
 static uint64_t qacc_bar0_read(void *opaque, hwaddr addr, unsigned size)
 {
     QuardAmpAccelState *s = opaque;
+    QAccQueue *q = qacc_selected_queue(s);
 
     if (size != 4) {
         return 0xffffffffU;
@@ -145,17 +172,17 @@ static uint64_t qacc_bar0_read(void *opaque, hwaddr addr, unsigned size)
     case QACC_REG_MAGIC:
         return QACC_MAGIC;
     case QACC_REG_STATUS:
-        return s->status;
+        return q->status;
     case QACC_REG_SRC_LO:
-        return (uint32_t)s->src;
+        return (uint32_t)q->src;
     case QACC_REG_SRC_HI:
-        return (uint32_t)(s->src >> 32);
+        return (uint32_t)(q->src >> 32);
     case QACC_REG_DST_LO:
-        return (uint32_t)s->dst;
+        return (uint32_t)q->dst;
     case QACC_REG_DST_HI:
-        return (uint32_t)(s->dst >> 32);
+        return (uint32_t)(q->dst >> 32);
     case QACC_REG_LEN:
-        return s->len;
+        return q->len;
     case QACC_REG_IRQ_STATUS:
         return s->irq_status;
     case QACC_REG_IOMMU_CTRL:
@@ -178,6 +205,14 @@ static uint64_t qacc_bar0_read(void *opaque, hwaddr addr, unsigned size)
         return (uint32_t)s->fault_addr;
     case QACC_REG_FAULT_HI:
         return (uint32_t)(s->fault_addr >> 32);
+    case QACC_REG_QUEUE_SEL:
+        return s->queue_sel;
+    case QACC_REG_QUEUE_DOMAIN:
+        return q->domain;
+    case QACC_REG_QUEUE_VECTOR:
+        return q->vector;
+    case QACC_REG_QUEUE_COUNT:
+        return QACC_QUEUE_COUNT;
     default:
         return 0;
     }
@@ -187,6 +222,7 @@ static void qacc_bar0_write(void *opaque, hwaddr addr, uint64_t val,
                             unsigned size)
 {
     QuardAmpAccelState *s = opaque;
+    QAccQueue *q = qacc_selected_queue(s);
 
     if (size != 4) {
         return;
@@ -194,22 +230,22 @@ static void qacc_bar0_write(void *opaque, hwaddr addr, uint64_t val,
 
     switch (addr) {
     case QACC_REG_STATUS:
-        s->status &= ~(uint32_t)val;
+        q->status &= ~(uint32_t)val;
         break;
     case QACC_REG_SRC_LO:
-        s->src = (s->src & 0xffffffff00000000ULL) | (uint32_t)val;
+        q->src = (q->src & 0xffffffff00000000ULL) | (uint32_t)val;
         break;
     case QACC_REG_SRC_HI:
-        s->src = (s->src & 0xffffffffULL) | ((uint64_t)(uint32_t)val << 32);
+        q->src = (q->src & 0xffffffffULL) | ((uint64_t)(uint32_t)val << 32);
         break;
     case QACC_REG_DST_LO:
-        s->dst = (s->dst & 0xffffffff00000000ULL) | (uint32_t)val;
+        q->dst = (q->dst & 0xffffffff00000000ULL) | (uint32_t)val;
         break;
     case QACC_REG_DST_HI:
-        s->dst = (s->dst & 0xffffffffULL) | ((uint64_t)(uint32_t)val << 32);
+        q->dst = (q->dst & 0xffffffffULL) | ((uint64_t)(uint32_t)val << 32);
         break;
     case QACC_REG_LEN:
-        s->len = (uint32_t)val;
+        q->len = (uint32_t)val;
         break;
     case QACC_REG_CMD:
         if (val & QACC_CMD_RUN) {
@@ -225,7 +261,7 @@ static void qacc_bar0_write(void *opaque, hwaddr addr, uint64_t val,
     case QACC_REG_IOMMU_STATUS:
         s->iommu_status &= ~(uint32_t)val;
         if ((val & QACC_IOMMU_FAULT) != 0) {
-            s->status &= ~QACC_STATUS_FAULT;
+            q->status &= ~QACC_STATUS_FAULT;
         }
         break;
     case QACC_REG_IOVA_LO:
@@ -247,6 +283,15 @@ static void qacc_bar0_write(void *opaque, hwaddr addr, uint64_t val,
         break;
     case QACC_REG_MAP_PERM:
         s->map_perm = (uint32_t)val & (QACC_MAP_READ | QACC_MAP_WRITE);
+        break;
+    case QACC_REG_QUEUE_SEL:
+        s->queue_sel = (uint32_t)val % QACC_QUEUE_COUNT;
+        break;
+    case QACC_REG_QUEUE_DOMAIN:
+        q->domain = (uint32_t)val % QACC_QUEUE_COUNT;
+        break;
+    case QACC_REG_QUEUE_VECTOR:
+        q->vector = (uint32_t)val % QACC_QUEUE_COUNT;
         break;
     }
 }
@@ -270,6 +315,11 @@ static void qacc_realize(PCIDevice *pdev, Error **errp)
     QuardAmpAccelState *s = QUARDAMP_ACCEL(pdev);
 
     pci_config_set_interrupt_pin(pdev->config, 1);
+    s->queues[0].domain = 0;
+    s->queues[0].vector = 0;
+    s->queues[1].domain = 1;
+    s->queues[1].vector = 1;
+
     if (msi_init(pdev, 0, 1, true, false, errp)) {
         return;
     }
@@ -277,10 +327,18 @@ static void qacc_realize(PCIDevice *pdev, Error **errp)
     memory_region_init_io(&s->bar0, OBJECT(s), &qacc_bar0_ops, s,
                           "quardamp-accel-bar0", 64 * KiB);
     pci_register_bar(pdev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY, &s->bar0);
+
+    if (msix_init_exclusive_bar(pdev, QACC_QUEUE_COUNT, QACC_MSIX_BAR, errp)) {
+        return;
+    }
+    for (uint32_t i = 0; i < QACC_QUEUE_COUNT; i++) {
+        msix_vector_use(pdev, i);
+    }
 }
 
 static void qacc_exit(PCIDevice *pdev)
 {
+    msix_uninit_exclusive_bar(pdev);
     msi_uninit(pdev);
 }
 

@@ -61,7 +61,8 @@ plicinithart(void)
     imsic_enable_irq(UART0_IRQ);
     imsic_enable_irq(VIRTIO0_IRQ);
     imsic_enable_irq(MAILBOX_TO_XV6_IRQ);
-    imsic_enable_irq(PCIE_ACCEL_MSI_IRQ);
+    imsic_enable_irq(PCIE_ACCEL_MSIX_IRQ0);
+    imsic_enable_irq(PCIE_ACCEL_MSIX_IRQ1);
   }
 }
 

@@ -18,34 +18,54 @@ OBJECT_DECLARE_SIMPLE_TYPE(QuardAmpIommuState, QUARDAMP_IOMMU)
 #define QIOMMU_REG_MAP_PERM   0x1c
 #define QIOMMU_REG_FAULT_LO   0x20
 #define QIOMMU_REG_FAULT_HI   0x24
+#define QIOMMU_REG_DOMAIN_SEL 0x28
 
 #define QIOMMU_CTRL_ENABLE    0x1U
 #define QIOMMU_STATUS_FAULT   0x1U
+#define QIOMMU_DOMAINS        2
 
-struct QuardAmpIommuState {
-    SysBusDevice parent_obj;
-    MemoryRegion mmio;
-    uint32_t ctrl;
+typedef struct QuardAmpIommuDomain {
     uint32_t status;
     uint64_t iova_base;
     uint64_t pa_base;
     uint64_t map_len;
     uint32_t map_perm;
     uint64_t fault_addr;
+} QuardAmpIommuDomain;
+
+struct QuardAmpIommuState {
+    SysBusDevice parent_obj;
+    MemoryRegion mmio;
+    uint32_t ctrl;
+    uint32_t selected_domain;
+    QuardAmpIommuDomain domains[QIOMMU_DOMAINS];
 };
 
 static QuardAmpIommuState *quardamp_iommu_singleton;
 
-static void qiommu_record_fault(QuardAmpIommuState *s, uint64_t iova)
+static QuardAmpIommuDomain *qiommu_domain(QuardAmpIommuState *s,
+                                          uint32_t domain)
 {
-    s->status |= QIOMMU_STATUS_FAULT;
-    s->fault_addr = iova;
+    if (domain >= QIOMMU_DOMAINS) {
+        domain = 0;
+    }
+    return &s->domains[domain];
 }
 
-bool quardamp_iommu_translate(uint64_t iova, uint32_t len,
+static void qiommu_record_fault(QuardAmpIommuState *s, uint32_t domain,
+                                uint64_t iova)
+{
+    QuardAmpIommuDomain *d = qiommu_domain(s, domain);
+
+    d->status |= QIOMMU_STATUS_FAULT;
+    d->fault_addr = iova;
+}
+
+bool quardamp_iommu_translate(uint32_t domain, uint64_t iova, uint32_t len,
                               uint32_t perm, uint64_t *pa)
 {
     QuardAmpIommuState *s = quardamp_iommu_singleton;
+    QuardAmpIommuDomain *d;
     uint64_t offset;
 
     if (!s || !(s->ctrl & QIOMMU_CTRL_ENABLE)) {
@@ -53,21 +73,22 @@ bool quardamp_iommu_translate(uint64_t iova, uint32_t len,
         return true;
     }
 
-    if ((s->map_perm & perm) != perm || len > s->map_len ||
-        iova < s->iova_base) {
+    d = qiommu_domain(s, domain);
+    if ((d->map_perm & perm) != perm || len > d->map_len ||
+        iova < d->iova_base) {
         goto fault;
     }
 
-    offset = iova - s->iova_base;
-    if (offset > s->map_len || len > s->map_len - offset) {
+    offset = iova - d->iova_base;
+    if (offset > d->map_len || len > d->map_len - offset) {
         goto fault;
     }
 
-    *pa = s->pa_base + offset;
+    *pa = d->pa_base + offset;
     return true;
 
 fault:
-    qiommu_record_fault(s, iova);
+    qiommu_record_fault(s, domain, iova);
     return false;
 }
 
@@ -76,7 +97,17 @@ uint32_t quardamp_iommu_status(void)
     if (!quardamp_iommu_singleton) {
         return 0;
     }
-    return quardamp_iommu_singleton->status;
+    return quardamp_iommu_singleton->domains[0].status;
+}
+
+uint32_t quardamp_iommu_domain_status(uint32_t domain)
+{
+    QuardAmpIommuState *s = quardamp_iommu_singleton;
+
+    if (!s) {
+        return 0;
+    }
+    return qiommu_domain(s, domain)->status;
 }
 
 uint64_t quardamp_iommu_fault_addr(void)
@@ -84,12 +115,23 @@ uint64_t quardamp_iommu_fault_addr(void)
     if (!quardamp_iommu_singleton) {
         return 0;
     }
-    return quardamp_iommu_singleton->fault_addr;
+    return quardamp_iommu_singleton->domains[0].fault_addr;
+}
+
+uint64_t quardamp_iommu_domain_fault_addr(uint32_t domain)
+{
+    QuardAmpIommuState *s = quardamp_iommu_singleton;
+
+    if (!s) {
+        return 0;
+    }
+    return qiommu_domain(s, domain)->fault_addr;
 }
 
 static uint64_t qiommu_read(void *opaque, hwaddr addr, unsigned size)
 {
     QuardAmpIommuState *s = opaque;
+    QuardAmpIommuDomain *d = qiommu_domain(s, s->selected_domain);
 
     if (size != 4) {
         return 0xffffffffU;
@@ -99,23 +141,25 @@ static uint64_t qiommu_read(void *opaque, hwaddr addr, unsigned size)
     case QIOMMU_REG_CTRL:
         return s->ctrl;
     case QIOMMU_REG_STATUS:
-        return s->status;
+        return d->status;
     case QIOMMU_REG_IOVA_LO:
-        return (uint32_t)s->iova_base;
+        return (uint32_t)d->iova_base;
     case QIOMMU_REG_IOVA_HI:
-        return (uint32_t)(s->iova_base >> 32);
+        return (uint32_t)(d->iova_base >> 32);
     case QIOMMU_REG_PA_LO:
-        return (uint32_t)s->pa_base;
+        return (uint32_t)d->pa_base;
     case QIOMMU_REG_PA_HI:
-        return (uint32_t)(s->pa_base >> 32);
+        return (uint32_t)(d->pa_base >> 32);
     case QIOMMU_REG_MAP_LEN:
-        return (uint32_t)s->map_len;
+        return (uint32_t)d->map_len;
     case QIOMMU_REG_MAP_PERM:
-        return s->map_perm;
+        return d->map_perm;
     case QIOMMU_REG_FAULT_LO:
-        return (uint32_t)s->fault_addr;
+        return (uint32_t)d->fault_addr;
     case QIOMMU_REG_FAULT_HI:
-        return (uint32_t)(s->fault_addr >> 32);
+        return (uint32_t)(d->fault_addr >> 32);
+    case QIOMMU_REG_DOMAIN_SEL:
+        return s->selected_domain;
     default:
         return 0;
     }
@@ -125,6 +169,7 @@ static void qiommu_write(void *opaque, hwaddr addr, uint64_t val,
                          unsigned size)
 {
     QuardAmpIommuState *s = opaque;
+    QuardAmpIommuDomain *d = qiommu_domain(s, s->selected_domain);
 
     if (size != 4) {
         return;
@@ -135,29 +180,32 @@ static void qiommu_write(void *opaque, hwaddr addr, uint64_t val,
         s->ctrl = (uint32_t)val & QIOMMU_CTRL_ENABLE;
         break;
     case QIOMMU_REG_STATUS:
-        s->status &= ~(uint32_t)val;
+        d->status &= ~(uint32_t)val;
         break;
     case QIOMMU_REG_IOVA_LO:
-        s->iova_base = (s->iova_base & 0xffffffff00000000ULL) |
+        d->iova_base = (d->iova_base & 0xffffffff00000000ULL) |
                        (uint32_t)val;
         break;
     case QIOMMU_REG_IOVA_HI:
-        s->iova_base = (s->iova_base & 0xffffffffULL) |
+        d->iova_base = (d->iova_base & 0xffffffffULL) |
                        ((uint64_t)(uint32_t)val << 32);
         break;
     case QIOMMU_REG_PA_LO:
-        s->pa_base = (s->pa_base & 0xffffffff00000000ULL) | (uint32_t)val;
+        d->pa_base = (d->pa_base & 0xffffffff00000000ULL) | (uint32_t)val;
         break;
     case QIOMMU_REG_PA_HI:
-        s->pa_base = (s->pa_base & 0xffffffffULL) |
+        d->pa_base = (d->pa_base & 0xffffffffULL) |
                      ((uint64_t)(uint32_t)val << 32);
         break;
     case QIOMMU_REG_MAP_LEN:
-        s->map_len = (uint32_t)val;
+        d->map_len = (uint32_t)val;
         break;
     case QIOMMU_REG_MAP_PERM:
-        s->map_perm = (uint32_t)val &
+        d->map_perm = (uint32_t)val &
                       (QUARDAMP_IOMMU_PERM_READ | QUARDAMP_IOMMU_PERM_WRITE);
+        break;
+    case QIOMMU_REG_DOMAIN_SEL:
+        s->selected_domain = (uint32_t)val % QIOMMU_DOMAINS;
         break;
     }
 }
