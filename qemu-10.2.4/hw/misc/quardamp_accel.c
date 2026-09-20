@@ -2,6 +2,7 @@
 #include "qemu/units.h"
 #include "hw/pci/pci.h"
 #include "hw/pci/msi.h"
+#include "hw/misc/quardamp_iommu.h"
 #include "qemu/module.h"
 #include "qom/object.h"
 
@@ -18,14 +19,29 @@ OBJECT_DECLARE_SIMPLE_TYPE(QuardAmpAccelState, QUARDAMP_ACCEL)
 #define QACC_REG_CMD        0x1c
 #define QACC_REG_IRQ_STATUS 0x20
 #define QACC_REG_IRQ_ACK    0x24
+#define QACC_REG_IOMMU_CTRL 0x28
+#define QACC_REG_IOMMU_STATUS 0x2c
+#define QACC_REG_IOVA_LO    0x30
+#define QACC_REG_IOVA_HI    0x34
+#define QACC_REG_PA_LO      0x38
+#define QACC_REG_PA_HI      0x3c
+#define QACC_REG_MAP_LEN    0x40
+#define QACC_REG_MAP_PERM   0x44
+#define QACC_REG_FAULT_LO   0x48
+#define QACC_REG_FAULT_HI   0x4c
 
 #define QACC_MAGIC          0x51414343U /* QACC */
 #define QACC_STATUS_DONE    0x1U
 #define QACC_STATUS_BUSY    0x2U
+#define QACC_STATUS_FAULT   0x4U
 #define QACC_CMD_RUN        0x1U
 #define QACC_CMD_IRQ        0x2U
 #define QACC_IRQ_DONE       0x1U
 #define QACC_MAX_XFER       4096U
+#define QACC_IOMMU_ENABLE   0x1U
+#define QACC_IOMMU_FAULT    0x1U
+#define QACC_MAP_READ       0x1U
+#define QACC_MAP_WRITE      0x2U
 
 struct QuardAmpAccelState {
     PCIDevice parent_obj;
@@ -35,6 +51,13 @@ struct QuardAmpAccelState {
     uint64_t src;
     uint64_t dst;
     uint32_t len;
+    uint32_t iommu_ctrl;
+    uint32_t iommu_status;
+    uint64_t iova_base;
+    uint64_t pa_base;
+    uint64_t map_len;
+    uint32_t map_perm;
+    uint64_t fault_addr;
 };
 
 static void qacc_raise_irq(QuardAmpAccelState *s)
@@ -55,10 +78,32 @@ static void qacc_lower_irq(QuardAmpAccelState *s, uint32_t mask)
     }
 }
 
+static bool qacc_translate(QuardAmpAccelState *s, uint64_t iova,
+                           uint32_t len, uint32_t perm, uint64_t *pa)
+{
+    uint32_t qperm = 0;
+
+    if (perm & QACC_MAP_READ) {
+        qperm |= QUARDAMP_IOMMU_PERM_READ;
+    }
+    if (perm & QACC_MAP_WRITE) {
+        qperm |= QUARDAMP_IOMMU_PERM_WRITE;
+    }
+
+    if (!quardamp_iommu_translate(iova, len, qperm, pa)) {
+        s->iommu_status |= QACC_IOMMU_FAULT;
+        s->fault_addr = quardamp_iommu_fault_addr();
+        return false;
+    }
+    return true;
+}
+
 static void qacc_run(QuardAmpAccelState *s, uint32_t cmd)
 {
     uint8_t buf[QACC_MAX_XFER];
     uint32_t len = s->len;
+    uint64_t src_pa;
+    uint64_t dst_pa;
 
     if (len > QACC_MAX_XFER) {
         len = QACC_MAX_XFER;
@@ -66,11 +111,20 @@ static void qacc_run(QuardAmpAccelState *s, uint32_t cmd)
 
     s->status = QACC_STATUS_BUSY;
     if (len) {
-        pci_dma_read(&s->parent_obj, s->src, buf, len);
+        if (!qacc_translate(s, s->src, len, QACC_MAP_READ, &src_pa) ||
+            !qacc_translate(s, s->dst, len, QACC_MAP_WRITE, &dst_pa)) {
+            s->status = QACC_STATUS_DONE | QACC_STATUS_FAULT;
+            if (cmd & QACC_CMD_IRQ) {
+                qacc_raise_irq(s);
+            }
+            return;
+        }
+
+        pci_dma_read(&s->parent_obj, src_pa, buf, len);
         for (uint32_t i = 0; i < len; i++) {
             buf[i] ^= 0x5a;
         }
-        pci_dma_write(&s->parent_obj, s->dst, buf, len);
+        pci_dma_write(&s->parent_obj, dst_pa, buf, len);
     }
     s->status = QACC_STATUS_DONE;
 
@@ -104,6 +158,26 @@ static uint64_t qacc_bar0_read(void *opaque, hwaddr addr, unsigned size)
         return s->len;
     case QACC_REG_IRQ_STATUS:
         return s->irq_status;
+    case QACC_REG_IOMMU_CTRL:
+        return s->iommu_ctrl;
+    case QACC_REG_IOMMU_STATUS:
+        return s->iommu_status;
+    case QACC_REG_IOVA_LO:
+        return (uint32_t)s->iova_base;
+    case QACC_REG_IOVA_HI:
+        return (uint32_t)(s->iova_base >> 32);
+    case QACC_REG_PA_LO:
+        return (uint32_t)s->pa_base;
+    case QACC_REG_PA_HI:
+        return (uint32_t)(s->pa_base >> 32);
+    case QACC_REG_MAP_LEN:
+        return (uint32_t)s->map_len;
+    case QACC_REG_MAP_PERM:
+        return s->map_perm;
+    case QACC_REG_FAULT_LO:
+        return (uint32_t)s->fault_addr;
+    case QACC_REG_FAULT_HI:
+        return (uint32_t)(s->fault_addr >> 32);
     default:
         return 0;
     }
@@ -144,6 +218,35 @@ static void qacc_bar0_write(void *opaque, hwaddr addr, uint64_t val,
         break;
     case QACC_REG_IRQ_ACK:
         qacc_lower_irq(s, (uint32_t)val);
+        break;
+    case QACC_REG_IOMMU_CTRL:
+        s->iommu_ctrl = (uint32_t)val & QACC_IOMMU_ENABLE;
+        break;
+    case QACC_REG_IOMMU_STATUS:
+        s->iommu_status &= ~(uint32_t)val;
+        if ((val & QACC_IOMMU_FAULT) != 0) {
+            s->status &= ~QACC_STATUS_FAULT;
+        }
+        break;
+    case QACC_REG_IOVA_LO:
+        s->iova_base = (s->iova_base & 0xffffffff00000000ULL) | (uint32_t)val;
+        break;
+    case QACC_REG_IOVA_HI:
+        s->iova_base = (s->iova_base & 0xffffffffULL) |
+                       ((uint64_t)(uint32_t)val << 32);
+        break;
+    case QACC_REG_PA_LO:
+        s->pa_base = (s->pa_base & 0xffffffff00000000ULL) | (uint32_t)val;
+        break;
+    case QACC_REG_PA_HI:
+        s->pa_base = (s->pa_base & 0xffffffffULL) |
+                     ((uint64_t)(uint32_t)val << 32);
+        break;
+    case QACC_REG_MAP_LEN:
+        s->map_len = (uint32_t)val;
+        break;
+    case QACC_REG_MAP_PERM:
+        s->map_perm = (uint32_t)val & (QACC_MAP_READ | QACC_MAP_WRITE);
         break;
     }
 }

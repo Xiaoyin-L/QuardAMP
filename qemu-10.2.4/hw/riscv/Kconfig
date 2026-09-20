@@ -81,6 +81,7 @@ config QUARD_STAR
     select PFLASH_CFI01
     select VIRTIO_MMIO
     select QUARDAMP_MAILBOX
+    select QUARDAMP_IOMMU
     select QUARDAMP_ACCEL
 
     

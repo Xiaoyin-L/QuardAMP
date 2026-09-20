@@ -40,6 +40,7 @@ enum {
     QUARD_STAR_UART2,
     QUARD_STAR_VIRTIO,   // 新增：VirtIO 设备的 memmap 索引
     QUARD_STAR_MAILBOX,  // 新增：AMP mailbox 设备的 memmap 索引
+    QUARD_STAR_IOMMU,
     QUARD_STAR_FLASH,
     QUARD_STAR_PCIE_ECAM,
     QUARD_STAR_PCIE_MMIO,

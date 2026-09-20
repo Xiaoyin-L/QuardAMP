@@ -15,6 +15,9 @@ config QUARDAMP_ACCEL
     bool
     depends on PCI && MSI_NONBROKEN
 
+config QUARDAMP_IOMMU
+    bool
+
 config ARMSSE_CPU_PWRCTRL
     bool
 

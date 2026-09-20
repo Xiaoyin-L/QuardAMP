@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "defs.h"
 #include "dma.h"
+#include "iommu.h"
 
 #define QACC_VENDOR_ID 0x1efd
 #define QACC_DEVICE_ID 0xa001
@@ -30,13 +31,30 @@
 #define QACC_REG_CMD        0x1c
 #define QACC_REG_IRQ_STATUS 0x20
 #define QACC_REG_IRQ_ACK    0x24
+#define QACC_REG_IOMMU_CTRL 0x28
+#define QACC_REG_IOMMU_STATUS 0x2c
+#define QACC_REG_IOVA_LO    0x30
+#define QACC_REG_IOVA_HI    0x34
+#define QACC_REG_PA_LO      0x38
+#define QACC_REG_PA_HI      0x3c
+#define QACC_REG_MAP_LEN    0x40
+#define QACC_REG_MAP_PERM   0x44
+#define QACC_REG_FAULT_LO   0x48
+#define QACC_REG_FAULT_HI   0x4c
 
 #define QACC_MAGIC          0x51414343U
 #define QACC_STATUS_DONE    0x1U
+#define QACC_STATUS_FAULT   0x4U
 #define QACC_CMD_RUN        0x1U
 #define QACC_CMD_IRQ        0x2U
 #define QACC_IRQ_DONE       0x1U
 #define QACC_TEST_LEN       128
+#define QACC_IOMMU_ENABLE   0x1U
+#define QACC_IOMMU_FAULT    0x1U
+#define QACC_MAP_READ       0x1U
+#define QACC_MAP_WRITE      0x2U
+#define QACC_IOVA_BASE      0x10000000UL
+#define QACC_IOVA_SIZE      0x1000UL
 
 struct qacc_state {
   int present;
@@ -49,6 +67,10 @@ struct qacc_state {
   struct spinlock lock;
   struct dma_buf src_dma;
   struct dma_buf dst_dma;
+  uint64 src_iova;
+  uint64 dst_iova;
+  uint64 iova_base;
+  uint64 iova_size;
 };
 
 static struct qacc_state qacc;
@@ -166,6 +188,21 @@ pci_program_msi(void)
   return 0;
 }
 
+static void
+qacc_program_iommu(void)
+{
+  qacc.iova_base = QACC_IOVA_BASE;
+  qacc.iova_size = QACC_IOVA_SIZE;
+  qacc.src_iova = qacc.iova_base;
+  qacc.dst_iova = qacc.iova_base + (qacc.dst_dma.pa - qacc.src_dma.pa);
+
+  iommu_disable();
+  iommu_map_window(qacc.iova_base, qacc.src_dma.pa, qacc.iova_size,
+                   IOMMU_PERM_READ | IOMMU_PERM_WRITE);
+  iommu_clear_fault();
+  iommu_enable();
+}
+
 void
 pcie_accel_init(void)
 {
@@ -193,10 +230,18 @@ pcie_accel_init(void)
     return;
   }
 
+  if(qacc.dst_dma.pa < qacc.src_dma.pa ||
+     qacc.dst_dma.pa + qacc.dst_dma.size > qacc.src_dma.pa + QACC_IOVA_SIZE){
+    printf("pcie-accel: DMA buffers are not inside one IOVA window\n");
+    return;
+  }
+  qacc_program_iommu();
+
   qacc.present = 1;
-  printf("pcie-accel: bdf=%d:%d.%d bar0=0x%lx msi=%d dma_src=0x%lx dma_dst=0x%lx\n",
+  printf("pcie-accel: bdf=%d:%d.%d bar0=0x%lx msi=%d dma_src=0x%lx dma_dst=0x%lx iova=[0x%lx,0x%lx)\n",
          qacc.bus, qacc.dev, qacc.func, qacc.bar0, PCIE_ACCEL_MSI_IRQ,
-         qacc.src_dma.pa, qacc.dst_dma.pa);
+         qacc.src_dma.pa, qacc.dst_dma.pa,
+         qacc.iova_base, qacc.iova_base + qacc.iova_size);
 }
 
 void
@@ -214,12 +259,53 @@ pcie_accel_intr(void)
   }
 }
 
+static int
+qacc_wait_irq(uint timeout_ticks)
+{
+  uint ticks0;
+
+  acquire(&tickslock);
+  ticks0 = ticks;
+  release(&tickslock);
+
+  for(;;){
+    int seen;
+
+    acquire(&qacc.lock);
+    seen = qacc.irq_seen;
+    release(&qacc.lock);
+    if(seen)
+      return 0;
+
+    acquire(&tickslock);
+    if(ticks - ticks0 > timeout_ticks){
+      release(&tickslock);
+      return -1;
+    }
+    release(&tickslock);
+  }
+}
+
+static void
+qacc_reset_irq_seen(void)
+{
+  acquire(&qacc.lock);
+  qacc.irq_seen = 0;
+  release(&qacc.lock);
+}
+
+static uint64
+qacc_fault_addr(void)
+{
+  return iommu_fault_addr();
+}
+
 int
 pcie_accel_selftest(void)
 {
-  uint ticks0;
   uchar cpu_src[QACC_TEST_LEN];
   uchar cpu_dst[QACC_TEST_LEN];
+  uint64 bad_iova;
 
   if(!qacc.present)
     return -1;
@@ -234,41 +320,29 @@ pcie_accel_selftest(void)
   memset(qacc.dst_dma.va, 0, qacc.dst_dma.size);
   dma_sync_for_device(&qacc.dst_dma);
 
-  acquire(&qacc.lock);
-  qacc.irq_seen = 0;
-  release(&qacc.lock);
+  iommu_clear_fault();
+  *qacc_reg(QACC_REG_STATUS) = QACC_STATUS_DONE | QACC_STATUS_FAULT;
+  qacc_reset_irq_seen();
 
   __sync_synchronize();
-  *qacc_reg(QACC_REG_SRC_LO) = (uint32)qacc.src_dma.pa;
-  *qacc_reg(QACC_REG_SRC_HI) = (uint32)(qacc.src_dma.pa >> 32);
-  *qacc_reg(QACC_REG_DST_LO) = (uint32)qacc.dst_dma.pa;
-  *qacc_reg(QACC_REG_DST_HI) = (uint32)(qacc.dst_dma.pa >> 32);
+  *qacc_reg(QACC_REG_SRC_LO) = (uint32)qacc.src_iova;
+  *qacc_reg(QACC_REG_SRC_HI) = (uint32)(qacc.src_iova >> 32);
+  *qacc_reg(QACC_REG_DST_LO) = (uint32)qacc.dst_iova;
+  *qacc_reg(QACC_REG_DST_HI) = (uint32)(qacc.dst_iova >> 32);
   *qacc_reg(QACC_REG_LEN) = QACC_TEST_LEN;
-  *qacc_reg(QACC_REG_STATUS) = QACC_STATUS_DONE;
   *qacc_reg(QACC_REG_CMD) = QACC_CMD_RUN | QACC_CMD_IRQ;
   __sync_synchronize();
 
-  acquire(&tickslock);
-  ticks0 = ticks;
-  release(&tickslock);
-
-  for(;;){
-    int seen;
-
-    acquire(&qacc.lock);
-    seen = qacc.irq_seen;
-    release(&qacc.lock);
-    if(seen)
-      break;
-
-    acquire(&tickslock);
-    if(ticks - ticks0 > 20){
-      release(&tickslock);
-      printf("pcie-accel: timeout status=%x irq_status=%x\n",
-             *qacc_reg(QACC_REG_STATUS), *qacc_reg(QACC_REG_IRQ_STATUS));
-      return -1;
-    }
-    release(&tickslock);
+  if(qacc_wait_irq(20) < 0){
+    printf("pcie-accel: timeout status=%x irq_status=%x\n",
+           *qacc_reg(QACC_REG_STATUS), *qacc_reg(QACC_REG_IRQ_STATUS));
+    return -1;
+  }
+  if((*qacc_reg(QACC_REG_STATUS) & QACC_STATUS_FAULT) != 0 ||
+     (iommu_status() & QACC_IOMMU_FAULT) != 0){
+    printf("pcie-accel: unexpected IOMMU fault addr=0x%lx status=%x\n",
+           qacc_fault_addr(), iommu_status());
+    return -1;
   }
 
   if(dma_bounce_from_device(cpu_dst, &qacc.dst_dma, QACC_TEST_LEN) < 0)
@@ -283,7 +357,38 @@ pcie_accel_selftest(void)
     }
   }
 
-  printf("pcie-accel: selftest ok len=%d irq_count=%d bounce=on\n",
+  bad_iova = qacc.iova_base + qacc.iova_size + DMA_CACHELINE_SIZE;
+  *qacc_reg(QACC_REG_IRQ_ACK) = QACC_IRQ_DONE;
+  iommu_clear_fault();
+  *qacc_reg(QACC_REG_STATUS) = QACC_STATUS_DONE | QACC_STATUS_FAULT;
+  qacc_reset_irq_seen();
+  __sync_synchronize();
+  *qacc_reg(QACC_REG_SRC_LO) = (uint32)bad_iova;
+  *qacc_reg(QACC_REG_SRC_HI) = (uint32)(bad_iova >> 32);
+  *qacc_reg(QACC_REG_DST_LO) = (uint32)qacc.dst_iova;
+  *qacc_reg(QACC_REG_DST_HI) = (uint32)(qacc.dst_iova >> 32);
+  *qacc_reg(QACC_REG_LEN) = QACC_TEST_LEN;
+  *qacc_reg(QACC_REG_CMD) = QACC_CMD_RUN | QACC_CMD_IRQ;
+  __sync_synchronize();
+
+  if(qacc_wait_irq(20) < 0){
+    printf("pcie-accel: IOMMU fault test timeout status=%x irq_status=%x\n",
+           *qacc_reg(QACC_REG_STATUS), *qacc_reg(QACC_REG_IRQ_STATUS));
+    return -1;
+  }
+  if((*qacc_reg(QACC_REG_STATUS) & QACC_STATUS_FAULT) == 0 ||
+     (iommu_status() & QACC_IOMMU_FAULT) == 0 ||
+     qacc_fault_addr() != bad_iova){
+    printf("pcie-accel: IOMMU failed to block bad_iova=0x%lx fault=0x%lx status=%x iommu=%x\n",
+           bad_iova, qacc_fault_addr(), *qacc_reg(QACC_REG_STATUS),
+           iommu_status());
+    return -1;
+  }
+  *qacc_reg(QACC_REG_IRQ_ACK) = QACC_IRQ_DONE;
+  iommu_clear_fault();
+  *qacc_reg(QACC_REG_STATUS) = QACC_STATUS_DONE | QACC_STATUS_FAULT;
+
+  printf("pcie-accel: selftest ok len=%d irq_count=%d bounce=on iommu=on fault=blocked\n",
          QACC_TEST_LEN, qacc.irq_count);
   return 0;
 }

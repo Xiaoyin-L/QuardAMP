@@ -35,6 +35,9 @@ kvmmake(void)
   // AMP mailbox doorbell registers (quardamp-mailbox, 阶段 1 单向 doorbell)
   kvmmap(kpgtbl, MAILBOX, MAILBOX, PGSIZE, PTE_R | PTE_W);
 
+  // QuardAMP IOMMU / DMA protection block.
+  kvmmap(kpgtbl, QUARD_IOMMU, QUARD_IOMMU, QUARD_IOMMU_SIZE, PTE_R | PTE_W);
+
   // S-level APLIC
   kvmmap(kpgtbl, APLIC_S, APLIC_S, 0x8000, PTE_R | PTE_W);
 

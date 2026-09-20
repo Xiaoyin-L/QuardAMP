@@ -26,6 +26,7 @@ main()
     kinit();         // physical page allocator
     slab_init();     // small object allocator
     dma_init();      // fixed carveout for PCIe DMA bounce buffers
+    iommu_init();    // independent DMA address translation/protection block
     kvminit();       // create kernel page table
     kvminithart();   // turn on paging
     shmem_init();

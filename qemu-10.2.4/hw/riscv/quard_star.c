@@ -26,6 +26,7 @@
 #include "system/device_tree.h" 
 #include "system/system.h"
 #include "hw/misc/quardamp_mailbox.h"   /* 新增 include */
+#include "hw/misc/quardamp_iommu.h"
 
 
 #define QUARD_STAR_FLASH_SECTOR_SIZE (256 * KiB)
@@ -51,6 +52,7 @@ static const MemMapEntry virt_memmap[] = {
      * 选用 0x10004000，避开已占用的 UART0/1/2 与 VIRTIO 区间。
      */
     [QUARD_STAR_MAILBOX] = { 0x10004000,  QUARDAMP_MAILBOX_SIZE },
+    [QUARD_STAR_IOMMU] = { 0x10005000, 0x1000 },
     [QUARD_STAR_FLASH] = { 0x20000000,         0x2000000 },
     [QUARD_STAR_IMSIC_M] = { 0x24000000, QUARD_STAR_IMSIC_GROUP_MAX_SIZE },
     [QUARD_STAR_IMSIC_S] = { 0x28000000, QUARD_STAR_IMSIC_GROUP_MAX_SIZE },
@@ -384,6 +386,10 @@ static void quad_star_board_init(MachineState *machine)
         memmap[QUARD_STAR_VIRTIO].base,
         qdev_get_gpio_in(DEVICE(mmio_irqchip), QUARD_STAR_VIRTIO_IRQ)
     );
+
+    sysbus_create_simple(TYPE_QUARDAMP_IOMMU,
+                         memmap[QUARD_STAR_IOMMU].base,
+                         NULL);
 
     quard_star_pcie_init(system_memory, mmio_irqchip, s);
 

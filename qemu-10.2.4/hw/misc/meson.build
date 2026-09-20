@@ -35,6 +35,7 @@ system_ss.add(when: 'CONFIG_SIFIVE_E_AON', if_true: files('sifive_e_aon.c'))
 system_ss.add(when: 'CONFIG_SIFIVE_U_OTP', if_true: files('sifive_u_otp.c'))
 system_ss.add(when: 'CONFIG_SIFIVE_U_PRCI', if_true: files('sifive_u_prci.c'))
 system_ss.add(when: 'CONFIG_QUARDAMP_MAILBOX', if_true: files('quardamp_mailbox.c'))
+system_ss.add(when: 'CONFIG_QUARDAMP_IOMMU', if_true: files('quardamp_iommu.c'))
 system_ss.add(when: 'CONFIG_QUARDAMP_ACCEL', if_true: files('quardamp_accel.c'))
 
 subdir('macio')

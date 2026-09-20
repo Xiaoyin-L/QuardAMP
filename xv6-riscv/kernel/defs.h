@@ -214,6 +214,9 @@ void            mailboxintr(void);
 // dma.c
 void            dma_init(void);
 
+// iommu.c
+void            iommu_init(void);
+
 // pci_accel.c
 void            pcie_accel_init(void);
 void            pcie_accel_intr(void);
