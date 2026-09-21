@@ -12,30 +12,8 @@
 
 extern QueueHandle_t xUartRxQueue;
 
-#ifndef QUARDAMP_DEMO
-#define QUARDAMP_DEMO 0
-#endif
-
-#if QUARDAMP_DEMO
-static void task1(void *p_arg)
-{ 
-    int time = 0;
-    for(;;)
-    {
-        debug_log("task1 %x\n",time++);
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
-}
-
-static void task2(void *p_arg)
-{ 
-    int time = 0;
-    for(;;)
-    {
-        debug_log("task2 %x\n",time++);
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
-}
+#ifndef QUARDAMP_ACCEL_CLIENT
+#define QUARDAMP_ACCEL_CLIENT 1
 #endif
 
 /*
@@ -46,8 +24,8 @@ static void task2(void *p_arg)
  *   -> 唤醒本任务 -> portYIELD_FROM_ISR() 触发切换
  *   -> 本任务在任务上下文打印字符
  *
- * 优先级 5，高于 task1/task2 的 4，保证
- * ISR 后立即处理 RX 数据。
+ * 优先级 5，高于普通 control-plane client 任务，保证 ISR 后尽快处理
+ * RX 数据。
  */
 static void vUartRxTask(void *p_arg)
 {
@@ -62,30 +40,46 @@ static void vUartRxTask(void *p_arg)
     }
 }
 
-/*
- * 阶段 2：反向 doorbell（FreeRTOS -> xv6）测试任务。
- * FreeRTOS 侧没有 shell，无法像阶段 1 那样从用户态手动触发，
- * 改用专用任务自动触发（与阶段 1 的 mailboxtest 用户程序对称）。
- *
- * 时序考量：先等 5 秒让 xv6 完成启动并执行 plicinit/plicinithart
- * （在 PLIC 使能源 14）；随后间隔 2 秒连发两次不同 reason，
- * 验证重复触发与 reason 锁存都正确。即便提前触发，
- * 设备 pending 位会保持，xv6 使能后 PLIC 仍会补投递，不会丢。
- */
-#if QUARDAMP_DEMO
-static void vMailboxTestTask(void *p_arg)
+#if QUARDAMP_ACCEL_CLIENT
+static void vAccelClientTask(void *p_arg)
 {
-    vTaskDelay(pdMS_TO_TICKS(5000));
-    debug_log("mailboxtest: ring doorbell to xv6, reason=%x\n",
-              (unsigned long)0xa55a);
-    mailbox_ring_to_xv6(0xa55a);
+    uint32_t job_id = 1;
 
-    vTaskDelay(pdMS_TO_TICKS(2000));
-    debug_log("mailboxtest: ring doorbell to xv6, reason=%x\n",
-              (unsigned long)0x002b);
-    mailbox_ring_to_xv6(0x002b);
+    vTaskDelay(pdMS_TO_TICKS(7000));
+    for (;;) {
+        struct rpmsg_hdr *msg;
+        struct amp_accel_req req;
 
-    vTaskDelete(NULL);
+        req.type = SHMEM_CMD_ACCEL_SUBMIT;
+        req.job_id = job_id;
+        req.opcode = SHMEM_ACCEL_OP_XOR;
+        req.len = 128U;
+        req.src_offset = 0;
+        req.dst_offset = 0;
+
+        msg = icc_message_loan(SHMEM_EP_XV6_ACCEL);
+        if (msg == NULL) {
+            debug_log("accel client: loan failed job=%x\n",
+                      (unsigned long)job_id);
+        } else {
+            icc_prepare_app_message(msg, SHMEM_EP_RTOS_ACCEL,
+                                    SHMEM_EP_XV6_ACCEL,
+                                    SHMEM_CMD_ACCEL_SUBMIT,
+                                    job_id, 0,
+                                    (const char *)&req,
+                                    sizeof(req));
+            if (icc_message_send(msg) == 0) {
+                debug_log("accel client: submit job=%x len=%d\n",
+                          (unsigned long)job_id, (int)req.len);
+                job_id++;
+            } else {
+                debug_log("accel client: send failed job=%x\n",
+                          (unsigned long)job_id);
+            }
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(5000));
+    }
 }
 #endif
 
@@ -93,16 +87,11 @@ static void vTaskCreate(void *p_arg)
 { 
 	debug_log("vTaskCreate\n");
 
-#if QUARDAMP_DEMO
-    xTaskCreate(task1,"task1",2048,NULL,4,NULL);
-    xTaskCreate(task2,"task2",2048,NULL,4,NULL);
-#endif
     xTaskCreate(vUartRxTask,"vUartRxTask",2048,NULL,5,NULL);
     xTaskCreate(vIccDispatchTask,"vIccDispatchTask",512,NULL,5,NULL);
     xTaskCreate(vIccNsTask,"vIccNsTask",512,NULL,4,NULL);
-#if QUARDAMP_DEMO
-    xTaskCreate(vIccTestTask,"vIccTestTask",512,NULL,4,NULL);
-    xTaskCreate(vMailboxTestTask,"vMailboxTestTask",512,NULL,4,NULL);
+#if QUARDAMP_ACCEL_CLIENT
+    xTaskCreate(vAccelClientTask,"vAccelClientTask",512,NULL,4,NULL);
 #endif
 
     vTaskDelete(NULL);
@@ -139,7 +128,7 @@ int main(void)
         debug_log("icc: register echo handler failed\n");
     }
     /*
-     * Stage 6: register a second service endpoint used by xv6 rpctest.
+     * Register the regression RPC endpoint used by xv6 rpctest.
      * The handler runs in vIccDispatchTask context, not in the mailbox ISR,
      * so doing byte-wise payload conversion and sending a reply is safe here.
      */
@@ -149,6 +138,12 @@ int main(void)
     if (icc_register_handler(SHMEM_EP_RTOS_BENCH, icc_bench_handler) != 0) {
         debug_log("icc: register bench handler failed\n");
     }
+#if QUARDAMP_ACCEL_CLIENT
+    if (icc_register_handler(SHMEM_EP_RTOS_ACCEL,
+                             icc_accel_complete_handler) != 0) {
+        debug_log("icc: register accel handler failed\n");
+    }
+#endif
 
     /*
      * 创建 UART RX 队列：64 个 char 元素。

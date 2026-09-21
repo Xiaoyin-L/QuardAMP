@@ -3,11 +3,12 @@
 #include "user/user.h"
 
 /*
- * rpctest -- stage-6 synchronous RPC user test.
+ * rpctest -- ICC RPC regression test.
  *
- * Stage 5 exposes iccsend() and iccrecv() as two independent syscalls.  That is
+ * iccsend() and iccrecv() expose independent syscalls.  That is
  * enough for a single manual test, but user space must pick cookies and pair
- * replies by itself.  Stage 6 folds the request/reply sequence into rpccall():
+ * replies by itself.  rpccall() folds the request/reply sequence into one
+ * regression-friendly API:
  *   user rpccall()
  *     -> sys_rpccall()
  *     -> icc_rpc_call() allocates a private cookie and pending slot

@@ -3,13 +3,13 @@
 #include "user/user.h"
 
 /*
- * icctest -- stage-5 synchronous ICC user test.
+ * icctest -- ICC echo regression test.
  *
  * Usage:
  *   icctest             # default cookie 0x5001
  *   icctest <cookie>    # decimal cookie
  *
- * This is the first user-visible receive path:
+ * This keeps the basic request/reply control-plane path covered:
  *   iccsend() -> sys_iccsend() -> icc_send()
  *     -> shared to_rtos ring + mailbox to FreeRTOS
  *     -> FreeRTOS echo handler replies through to_xv6

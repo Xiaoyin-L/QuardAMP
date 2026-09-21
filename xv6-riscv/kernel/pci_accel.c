@@ -7,6 +7,7 @@
 #include "dma.h"
 #include "iommu.h"
 #include "pcie_accel.h"
+#include "shmem.h"
 
 #define QACC_VENDOR_ID 0x1efd
 #define QACC_DEVICE_ID 0xa001
@@ -445,6 +446,108 @@ qacc_verify_dst(uint32 len)
       return -1;
   }
   return 0;
+}
+
+static int
+qacc_verify_dst_window(uint64 src_offset, uint64 dst_offset, uint32 len)
+{
+  uchar *src = (uchar*)qacc.src_dma.va + src_offset;
+  uchar *dst = (uchar*)qacc.dst_dma.va + dst_offset;
+
+  for(uint32 i = 0; i < len; i++){
+    uchar expected = src[i] ^ 0x5a;
+    if(dst[i] != expected)
+      return -1;
+  }
+  return 0;
+}
+
+int
+pcie_accel_submit_job(struct amp_accel_req *req, struct amp_accel_resp *resp)
+{
+  struct accel_job job;
+  uint64 t0;
+  uint64 t1;
+  uint32 irq0;
+
+  memset(resp, 0, sizeof(*resp));
+  resp->type = SHMEM_CMD_ACCEL_COMPLETE;
+  resp->job_id = req->job_id;
+  resp->state = ACCEL_JOB_NEW;
+  resp->status = SHMEM_ACCEL_STATUS_INVAL;
+  resp->len = req->len;
+
+  if(!qacc.present){
+    resp->status = SHMEM_ACCEL_STATUS_NO_DEVICE;
+    return -1;
+  }
+  if(req->opcode != SHMEM_ACCEL_OP_XOR || req->len == 0 ||
+     req->src_offset > qacc.src_dma.size ||
+     req->dst_offset > qacc.dst_dma.size ||
+     req->len > qacc.src_dma.size - req->src_offset ||
+     req->len > qacc.dst_dma.size - req->dst_offset){
+    resp->status = SHMEM_ACCEL_STATUS_INVAL;
+    return -1;
+  }
+
+  job.job_id = req->job_id;
+  job.opcode = req->opcode;
+  job.src_iova = qacc.src_iova + req->src_offset;
+  job.dst_iova = qacc.dst_iova + req->dst_offset;
+  job.len = req->len;
+  job.state = ACCEL_JOB_QUEUED;
+  job.status = SHMEM_ACCEL_STATUS_OK;
+
+  qacc_fill_src(qacc.src_dma.size);
+  memset(qacc.dst_dma.va, 0, qacc.dst_dma.size);
+  dma_sync_for_device(&qacc.src_dma);
+  dma_sync_for_device(&qacc.dst_dma);
+  iommu_clear_domain_fault(QACC_DOMAIN_XV6);
+
+  acquire(&qacc.lock);
+  irq0 = qacc.irq_count;
+  release(&qacc.lock);
+
+  job.state = ACCEL_JOB_RUNNING;
+  resp->state = ACCEL_JOB_RUNNING;
+  t0 = r_time();
+  if(qacc_run_dma(QACC_QUEUE0, QACC_VECTOR0,
+                  job.src_iova, job.dst_iova, job.len, 0) < 0){
+    if((iommu_domain_status(QACC_DOMAIN_XV6) & QACC_IOMMU_FAULT) != 0){
+      job.state = ACCEL_JOB_FAULT;
+      job.status = SHMEM_ACCEL_STATUS_FAULT;
+    } else {
+      job.state = ACCEL_JOB_TIMEOUT;
+      job.status = SHMEM_ACCEL_STATUS_TIMEOUT;
+    }
+    t1 = r_time();
+    goto out;
+  }
+  dma_sync_for_cpu(&qacc.dst_dma);
+  if(qacc_verify_dst_window(req->src_offset, req->dst_offset, req->len) < 0){
+    job.state = ACCEL_JOB_FAULT;
+    job.status = SHMEM_ACCEL_STATUS_FAULT;
+    t1 = r_time();
+    goto out;
+  }
+
+  job.state = ACCEL_JOB_DONE;
+  job.status = SHMEM_ACCEL_STATUS_OK;
+  t1 = r_time();
+
+out:
+  resp->type = job.status == SHMEM_ACCEL_STATUS_OK ?
+               SHMEM_CMD_ACCEL_COMPLETE : SHMEM_CMD_ACCEL_ERROR;
+  resp->job_id = job.job_id;
+  resp->state = job.state;
+  resp->status = job.status;
+  resp->len = job.len;
+  acquire(&qacc.lock);
+  resp->irq_count = qacc.irq_count - irq0;
+  release(&qacc.lock);
+  resp->elapsed_ticks = t1 - t0;
+
+  return job.status == SHMEM_ACCEL_STATUS_OK ? 0 : -1;
 }
 
 int

@@ -37,3 +37,5 @@
 #define SYS_iccsendbatch 32
 #define SYS_pcieacceltest 33
 #define SYS_pcieaccelbench 34
+#define SYS_pcieacceljob 35
+#define SYS_iccrecvmsg 36

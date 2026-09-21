@@ -333,6 +333,7 @@ icc_init(void)
   }
 
   icc_eps[0].ep = SHMEM_EP_XV6_TEST;
+  icc_eps[1].ep = SHMEM_EP_XV6_ACCEL;
   initlock(&icc_send_lock, "icc_send");
 
   for(int i = 0; i < ICC_RPC_MAX_PENDING; i++){

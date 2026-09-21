@@ -13,8 +13,9 @@
  * split-ring operations in icc.c, while this file resets and describes the
  * shared vring/buffer layout.
  *
- * This file stays as the shared-memory reset point plus the old shmemsend()
- * syscall backend, so earlier tests keep working on top of the new ICC layer.
+ * This file stays as the shared-memory reset point plus the legacy shmemsend()
+ * syscall backend.  That entry is now a regression baseline for the ICC
+ * control plane, not the project's primary workload path.
  */
 static const char shmem_test_payload[] = "xv6->rtos phase5 hello";
 

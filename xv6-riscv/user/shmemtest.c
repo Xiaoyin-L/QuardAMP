@@ -2,14 +2,15 @@
 #include "user/user.h"
 
 /*
- * Stage 5 compatibility smoke test.
+ * Legacy shmemsend() regression test.
  *
  * shmemsend() is kept as the older user entry, but its kernel backend now
  * calls icc_send().  Replies are no longer consumed by shmem.c directly:
  * mailboxintr() enters icc_notify_recv(), which dispatches to the local
  * endpoint and wakes a process if one is blocked in iccrecv().
  *
- * Use icctest for the full synchronous user-space request/reply path.
+ * Use icctest/rpctest for synchronous request/reply coverage, and accelserv
+ * for the accelerator control-plane path.
  */
 int
 main(int argc, char *argv[])

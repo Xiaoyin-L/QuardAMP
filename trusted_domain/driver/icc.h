@@ -27,7 +27,6 @@ void icc_prepare_app_message(struct rpmsg_hdr *hdr, uint32_t src_ep,
 void icc_isr_drain_to_rtos(void);
 void vIccDispatchTask(void *p_arg);
 void vIccNsTask(void *p_arg);
-void vIccTestTask(void *p_arg);
 void icc_echo_handler(struct icc_msg *msg);
 
 /*
@@ -37,5 +36,6 @@ void icc_echo_handler(struct icc_msg *msg);
  */
 void icc_upper_handler(struct icc_msg *msg);
 void icc_bench_handler(struct icc_msg *msg);
+void icc_accel_complete_handler(struct icc_msg *msg);
 
 #endif /* ICC_H */

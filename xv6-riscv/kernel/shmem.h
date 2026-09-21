@@ -18,12 +18,44 @@
 #define VIRTIO_RPMSG_F_NS 0
 
 #define SHMEM_EP_XV6_TEST    0x00000100
+#define SHMEM_EP_XV6_ACCEL   0x00000110
 #define SHMEM_EP_RTOS_ECHO   0x00010100
 #define SHMEM_EP_RTOS_UPPER  0x00010200
 #define SHMEM_EP_RTOS_BENCH  0x00010300
+#define SHMEM_EP_RTOS_ACCEL  0x00010400
 
 #define SHMEM_CMD_TEST       0x00000200
 #define SHMEM_CMD_BENCH      0x00000500
+#define SHMEM_CMD_ACCEL_SUBMIT   0x00000600
+#define SHMEM_CMD_ACCEL_COMPLETE 0x00000601
+#define SHMEM_CMD_ACCEL_ERROR    0x00000602
+
+#define SHMEM_ACCEL_OP_XOR       1
+
+#define SHMEM_ACCEL_STATUS_OK        0
+#define SHMEM_ACCEL_STATUS_INVAL    -1
+#define SHMEM_ACCEL_STATUS_NO_DEVICE -2
+#define SHMEM_ACCEL_STATUS_FAULT    -3
+#define SHMEM_ACCEL_STATUS_TIMEOUT  -4
+
+struct amp_accel_req {
+  uint32 type;
+  uint32 job_id;
+  uint32 opcode;
+  uint32 len;
+  uint64 src_offset;
+  uint64 dst_offset;
+} __attribute__((packed));
+
+struct amp_accel_resp {
+  uint32 type;
+  uint32 job_id;
+  uint32 state;
+  int status;
+  uint32 len;
+  uint32 irq_count;
+  uint64 elapsed_ticks;
+} __attribute__((packed));
 
 #define RPMSG_HDR_SIZE     16
 #define RPMSG_APP_HDR_SIZE 12

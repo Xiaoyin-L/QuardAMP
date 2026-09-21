@@ -82,9 +82,8 @@ void handle_interrupt(void)
 
     /*
      * 如果 xQueueSendFromISR 唤醒了比当前被中断任务
-     * 更高优先级的任务（vUartRxTask 优先级 5 >
-     * task1/task2 优先级 4），则在退出 ISR 时触发
-     * 一次任务切换，让消费任务立即运行。
+     * 更高优先级的任务，则在退出 ISR 时触发一次任务切换，让消费任务
+     * 立即运行。
      */
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }

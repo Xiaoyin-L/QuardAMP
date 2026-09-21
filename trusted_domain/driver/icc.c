@@ -483,6 +483,7 @@ void vIccNsTask(void *p_arg)
     icc_announce_service("rpmsg-echo", SHMEM_EP_RTOS_ECHO);
     icc_announce_service("quardamp-rpc", SHMEM_EP_RTOS_UPPER);
     icc_announce_service("quardamp-bench", SHMEM_EP_RTOS_BENCH);
+    icc_announce_service("quardamp-accel-client", SHMEM_EP_RTOS_ACCEL);
     vTaskDelete(NULL);
 }
 
@@ -643,27 +644,27 @@ void icc_bench_handler(struct icc_msg *msg)
     (void)icc_message_send(reply);
 }
 
-void vIccTestTask(void *p_arg)
+void icc_accel_complete_handler(struct icc_msg *msg)
 {
-    struct rpmsg_hdr *msg;
+    struct amp_accel_resp resp;
 
-    (void)p_arg;
-
-    vTaskDelay(pdMS_TO_TICKS(9000));
-
-    msg = icc_message_loan(SHMEM_EP_XV6_TEST);
-    if (msg == NULL) {
-        debug_log("rpmsg test: loan failed\n");
-        vTaskDelete(NULL);
+    if (msg->len != sizeof(resp)) {
+        debug_log("accel client: bad response len=%d cmd=%x cookie=%x\n",
+                  (int)msg->len, (unsigned long)msg->cmd,
+                  (unsigned long)msg->cookie);
         return;
     }
 
-    icc_prepare_app_message(msg, SHMEM_EP_RTOS_ECHO, SHMEM_EP_XV6_TEST,
-                            SHMEM_CMD_TEST, 0x4001, 0,
-                            "rtos->xv6 rpmsg hello",
-                            payload_len("rtos->xv6 rpmsg hello"));
-    debug_log("rpmsg test: send to xv6 cookie=%x\n", (unsigned long)0x4001);
+    for (uint32_t i = 0; i < sizeof(resp); i++) {
+        ((uint8_t *)&resp)[i] = (uint8_t)msg->payload[i];
+    }
 
-    (void)icc_message_send(msg);
-    vTaskDelete(NULL);
+    debug_log("accel client: job=%x cmd=%x state=%d status=%d len=%d ticks=%x irq=%d\n",
+              (unsigned long)resp.job_id,
+              (unsigned long)msg->cmd,
+              (int)resp.state,
+              (int)resp.status,
+              (int)resp.len,
+              (unsigned long)resp.elapsed_ticks,
+              (int)resp.irq_count);
 }

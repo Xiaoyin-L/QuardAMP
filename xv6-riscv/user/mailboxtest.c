@@ -1,5 +1,5 @@
 /*
- * mailboxtest —— 阶段 1 单向 doorbell（xv6 -> FreeRTOS）冒烟测试程序。
+ * mailboxtest —— legacy mailbox doorbell regression test.
  *
  * 用法：
  *   mailboxtest            # 使用默认 reason 0x5aa5
@@ -12,7 +12,9 @@
  *       -> FreeRTOS(hart7) handle_interrupt() 打印
  *          "mailbox irq received, reason=..."（serial2）。
  *
- * 阶段 1 的临时测试入口；正式 ICC/rpmsg 通道建立后移除。
+ * This is no longer the project workload path.  Keep it as a low-level
+ * regression test for the raw notification device used by the AMP control
+ * plane.
  */
 #include "kernel/types.h"
 #include "user/user.h"

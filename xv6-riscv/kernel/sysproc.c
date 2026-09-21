@@ -244,6 +244,30 @@ sys_iccrecv(void)
                        (uint32)max_len, (uint32)timeout_ms);
 }
 
+uint64
+sys_iccrecvmsg(void)
+{
+  int ep;
+  int timeout_ms;
+  uint64 msg_addr;
+  struct icc_msg msg;
+
+  argint(0, &ep);
+  argaddr(1, &msg_addr);
+  argint(2, &timeout_ms);
+
+  if(timeout_ms < 0)
+    timeout_ms = 0;
+
+  if(icc_recv((uint32)ep, &msg, (uint32)timeout_ms) < 0)
+    return -1;
+
+  if(copyout(myproc()->pagetable, msg_addr, (char*)&msg, sizeof(msg)) < 0)
+    return -1;
+
+  return msg.len;
+}
+
 /*
  * Batched ICC send syscall.
  *
@@ -307,8 +331,32 @@ sys_pcieaccelbench(void)
   return 0;
 }
 
+uint64
+sys_pcieacceljob(void)
+{
+  uint64 req_addr;
+  uint64 resp_addr;
+  struct amp_accel_req req;
+  struct amp_accel_resp resp;
+  struct proc *p = myproc();
+  int ret;
+
+  argaddr(0, &req_addr);
+  argaddr(1, &resp_addr);
+
+  if(copyin(p->pagetable, (char*)&req, req_addr, sizeof(req)) < 0)
+    return -1;
+
+  ret = pcie_accel_submit_job(&req, &resp);
+
+  if(copyout(p->pagetable, resp_addr, (char*)&resp, sizeof(resp)) < 0)
+    return -1;
+
+  return ret;
+}
+
 /*
- * Stage 6 RPC syscall.
+ * ICC RPC regression syscall.
  *
  * User space passes a remote endpoint, command, request payload and reply
  * buffer.  The kernel keeps cookie allocation private to icc_rpc_call(), so

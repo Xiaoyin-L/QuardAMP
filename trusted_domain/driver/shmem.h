@@ -36,12 +36,44 @@
 #define VIRTIO_RPMSG_F_NS 0U
 
 #define SHMEM_EP_XV6_TEST    0x00000100U
+#define SHMEM_EP_XV6_ACCEL   0x00000110U
 #define SHMEM_EP_RTOS_ECHO   0x00010100U
 #define SHMEM_EP_RTOS_UPPER  0x00010200U
 #define SHMEM_EP_RTOS_BENCH  0x00010300U
+#define SHMEM_EP_RTOS_ACCEL  0x00010400U
 
 #define SHMEM_CMD_TEST       0x00000200U
 #define SHMEM_CMD_BENCH      0x00000500U
+#define SHMEM_CMD_ACCEL_SUBMIT   0x00000600U
+#define SHMEM_CMD_ACCEL_COMPLETE 0x00000601U
+#define SHMEM_CMD_ACCEL_ERROR    0x00000602U
+
+#define SHMEM_ACCEL_OP_XOR       1U
+
+#define SHMEM_ACCEL_STATUS_OK        0
+#define SHMEM_ACCEL_STATUS_INVAL    -1
+#define SHMEM_ACCEL_STATUS_NO_DEVICE -2
+#define SHMEM_ACCEL_STATUS_FAULT    -3
+#define SHMEM_ACCEL_STATUS_TIMEOUT  -4
+
+struct amp_accel_req {
+    uint32_t type;
+    uint32_t job_id;
+    uint32_t opcode;
+    uint32_t len;
+    uint64_t src_offset;
+    uint64_t dst_offset;
+} __attribute__((packed));
+
+struct amp_accel_resp {
+    uint32_t type;
+    uint32_t job_id;
+    uint32_t state;
+    int32_t status;
+    uint32_t len;
+    uint32_t irq_count;
+    uint64_t elapsed_ticks;
+} __attribute__((packed));
 
 #define RPMSG_HDR_SIZE     16U
 #define RPMSG_APP_HDR_SIZE 12U

@@ -10,6 +10,7 @@
 #include "kernel/fcntl.h"
 
 char *argv[] = { "sh", 0 };
+char *accelargv[] = { "accelserv", 0 };
 
 int
 main(void)
@@ -22,6 +23,15 @@ main(void)
   }
   dup(0);  // stdout
   dup(0);  // stderr
+
+  pid = fork();
+  if(pid == 0){
+    exec("accelserv", accelargv);
+    printf("init: exec accelserv failed\n");
+    exit(1);
+  }
+  if(pid < 0)
+    printf("init: accelserv fork failed\n");
 
   for(;;){
     printf("init: starting sh\n");

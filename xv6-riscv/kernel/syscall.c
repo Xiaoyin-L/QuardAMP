@@ -110,12 +110,14 @@ extern uint64 sys_mailboxring(void);
 extern uint64 sys_shmemsend(void);
 extern uint64 sys_iccsend(void);
 extern uint64 sys_iccrecv(void);
+extern uint64 sys_iccrecvmsg(void);
 extern uint64 sys_rpccall(void);
 extern uint64 sys_rdtime(void);
 extern uint64 sys_rdcycle(void);
 extern uint64 sys_iccsendbatch(void);
 extern uint64 sys_pcieacceltest(void);
 extern uint64 sys_pcieaccelbench(void);
+extern uint64 sys_pcieacceljob(void);
 
 // An array mapping syscall numbers from syscall.h
 // to the function that handles the system call.
@@ -148,12 +150,14 @@ static uint64 (*syscalls[])(void) = {
 [SYS_shmemsend] sys_shmemsend,
 [SYS_iccsend] sys_iccsend,
 [SYS_iccrecv] sys_iccrecv,
+[SYS_iccrecvmsg] sys_iccrecvmsg,
 [SYS_rpccall] sys_rpccall,
 [SYS_rdtime] sys_rdtime,
 [SYS_rdcycle] sys_rdcycle,
 [SYS_iccsendbatch] sys_iccsendbatch,
 [SYS_pcieacceltest] sys_pcieacceltest,
 [SYS_pcieaccelbench] sys_pcieaccelbench,
+[SYS_pcieacceljob] sys_pcieacceljob,
 };
 
 void

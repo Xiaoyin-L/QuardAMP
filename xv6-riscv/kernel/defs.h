@@ -222,7 +222,10 @@ void            pcie_accel_init(void);
 void            pcie_accel_intr(int);
 int             pcie_accel_selftest(void);
 struct pcie_accel_bench_result;
+struct amp_accel_req;
+struct amp_accel_resp;
 int             pcie_accel_benchmark(struct pcie_accel_bench_result*);
+int             pcie_accel_submit_job(struct amp_accel_req*, struct amp_accel_resp*);
 
 // shmem.c
 void            shmem_init(void);
