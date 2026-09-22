@@ -34,6 +34,16 @@ OBJECT_DECLARE_SIMPLE_TYPE(QuardAmpAccelState, QUARDAMP_ACCEL)
 #define QACC_REG_QUEUE_DOMAIN 0x54
 #define QACC_REG_QUEUE_VECTOR 0x58
 #define QACC_REG_QUEUE_COUNT 0x5c
+#define QACC_REG_SQ_BASE_LO  0x60
+#define QACC_REG_SQ_BASE_HI  0x64
+#define QACC_REG_SQ_SIZE     0x68
+#define QACC_REG_SQ_TAIL     0x6c
+#define QACC_REG_CQ_BASE_LO  0x70
+#define QACC_REG_CQ_BASE_HI  0x74
+#define QACC_REG_CQ_SIZE     0x78
+#define QACC_REG_CQ_HEAD     0x7c
+#define QACC_REG_DOORBELL    0x80
+#define QACC_REG_CQ_TAIL     0x84
 
 #define QACC_MAGIC          0x51414343U /* QACC */
 #define QACC_STATUS_DONE    0x1U
@@ -49,6 +59,26 @@ OBJECT_DECLARE_SIMPLE_TYPE(QuardAmpAccelState, QUARDAMP_ACCEL)
 #define QACC_MAP_WRITE      0x2U
 #define QACC_QUEUE_COUNT    2U
 #define QACC_MSIX_BAR       4U
+#define QACC_DESC_SIZE      32U
+#define QACC_CQE_SIZE       16U
+#define QACC_OP_XOR         1U
+
+typedef struct QAccDesc {
+    uint64_t src;
+    uint64_t dst;
+    uint32_t len;
+    uint16_t opcode;
+    uint16_t flags;
+    uint32_t job_id;
+    uint32_t reserved;
+} QEMU_PACKED QAccDesc;
+
+typedef struct QAccCqe {
+    uint32_t job_id;
+    int32_t status;
+    uint32_t len;
+    uint32_t flags;
+} QEMU_PACKED QAccCqe;
 
 typedef struct QAccQueue {
     uint32_t status;
@@ -57,6 +87,14 @@ typedef struct QAccQueue {
     uint32_t len;
     uint32_t domain;
     uint32_t vector;
+    uint64_t sq_base;
+    uint64_t cq_base;
+    uint32_t sq_size;
+    uint32_t cq_size;
+    uint32_t sq_head;
+    uint32_t sq_tail;
+    uint32_t cq_head;
+    uint32_t cq_tail;
 } QAccQueue;
 
 struct QuardAmpAccelState {
@@ -122,39 +160,104 @@ static bool qacc_translate(QuardAmpAccelState *s, uint64_t iova,
     return true;
 }
 
-static void qacc_run(QuardAmpAccelState *s, uint32_t cmd)
+static int qacc_execute_xor(QuardAmpAccelState *s, QAccQueue *q,
+                            uint64_t src, uint64_t dst, uint32_t len)
 {
     uint8_t buf[QACC_MAX_XFER];
-    uint32_t queue = s->queue_sel % QACC_QUEUE_COUNT;
-    QAccQueue *q = &s->queues[queue];
-    uint32_t len = q->len;
     uint64_t src_pa;
     uint64_t dst_pa;
 
     if (len > QACC_MAX_XFER) {
         len = QACC_MAX_XFER;
     }
+    if (!len) {
+        return 0;
+    }
+    if (!qacc_translate(s, src, len, QACC_MAP_READ, q->domain, &src_pa) ||
+        !qacc_translate(s, dst, len, QACC_MAP_WRITE, q->domain, &dst_pa)) {
+        return -1;
+    }
+
+    pci_dma_read(&s->parent_obj, src_pa, buf, len);
+    for (uint32_t i = 0; i < len; i++) {
+        buf[i] ^= 0x5a;
+    }
+    pci_dma_write(&s->parent_obj, dst_pa, buf, len);
+    return 0;
+}
+
+static void qacc_run(QuardAmpAccelState *s, uint32_t cmd)
+{
+    uint32_t queue = s->queue_sel % QACC_QUEUE_COUNT;
+    QAccQueue *q = &s->queues[queue];
+    uint32_t len = q->len;
+
+    if (len > QACC_MAX_XFER) {
+        len = QACC_MAX_XFER;
+    }
 
     q->status = QACC_STATUS_BUSY;
-    if (len) {
-        if (!qacc_translate(s, q->src, len, QACC_MAP_READ, q->domain, &src_pa) ||
-            !qacc_translate(s, q->dst, len, QACC_MAP_WRITE, q->domain, &dst_pa)) {
-            q->status = QACC_STATUS_DONE | QACC_STATUS_FAULT;
-            if (cmd & QACC_CMD_IRQ) {
-                qacc_raise_irq(s, queue);
-            }
-            return;
+    if (qacc_execute_xor(s, q, q->src, q->dst, len) < 0) {
+        q->status = QACC_STATUS_DONE | QACC_STATUS_FAULT;
+        if (cmd & QACC_CMD_IRQ) {
+            qacc_raise_irq(s, queue);
         }
-
-        pci_dma_read(&s->parent_obj, src_pa, buf, len);
-        for (uint32_t i = 0; i < len; i++) {
-            buf[i] ^= 0x5a;
-        }
-        pci_dma_write(&s->parent_obj, dst_pa, buf, len);
+        return;
     }
     q->status = QACC_STATUS_DONE;
 
     if (cmd & QACC_CMD_IRQ) {
+        qacc_raise_irq(s, queue);
+    }
+}
+
+static void qacc_process_queue(QuardAmpAccelState *s, uint32_t queue)
+{
+    QAccQueue *q = &s->queues[queue % QACC_QUEUE_COUNT];
+    bool completed = false;
+
+    if (!q->sq_base || !q->cq_base || !q->sq_size || !q->cq_size) {
+        return;
+    }
+
+    q->status = QACC_STATUS_BUSY;
+    while (q->sq_head != q->sq_tail) {
+        QAccDesc desc;
+        QAccCqe cqe;
+        uint64_t desc_addr = q->sq_base + (uint64_t)q->sq_head * QACC_DESC_SIZE;
+        uint64_t cqe_addr = q->cq_base + (uint64_t)q->cq_tail * QACC_CQE_SIZE;
+        uint64_t src;
+        uint64_t dst;
+        uint32_t len;
+        uint16_t opcode;
+        int32_t status = 0;
+
+        pci_dma_read(&s->parent_obj, desc_addr, &desc, sizeof(desc));
+        src = le64_to_cpu(desc.src);
+        dst = le64_to_cpu(desc.dst);
+        len = le32_to_cpu(desc.len);
+        opcode = le16_to_cpu(desc.opcode);
+
+        if (len > QACC_MAX_XFER || opcode != QACC_OP_XOR) {
+            status = -1;
+        } else if (qacc_execute_xor(s, q, src, dst, len) < 0) {
+            status = -2;
+        }
+
+        cqe.job_id = desc.job_id;
+        cqe.status = cpu_to_le32(status);
+        cqe.len = cpu_to_le32(len);
+        cqe.flags = cpu_to_le32(status ? QACC_STATUS_FAULT : QACC_STATUS_DONE);
+        pci_dma_write(&s->parent_obj, cqe_addr, &cqe, sizeof(cqe));
+
+        q->status = status ? QACC_STATUS_DONE | QACC_STATUS_FAULT
+                           : QACC_STATUS_DONE;
+        q->sq_head = (q->sq_head + 1) % q->sq_size;
+        q->cq_tail = (q->cq_tail + 1) % q->cq_size;
+        completed = true;
+    }
+
+    if (completed) {
         qacc_raise_irq(s, queue);
     }
 }
@@ -213,6 +316,24 @@ static uint64_t qacc_bar0_read(void *opaque, hwaddr addr, unsigned size)
         return q->vector;
     case QACC_REG_QUEUE_COUNT:
         return QACC_QUEUE_COUNT;
+    case QACC_REG_SQ_BASE_LO:
+        return (uint32_t)q->sq_base;
+    case QACC_REG_SQ_BASE_HI:
+        return (uint32_t)(q->sq_base >> 32);
+    case QACC_REG_SQ_SIZE:
+        return q->sq_size;
+    case QACC_REG_SQ_TAIL:
+        return q->sq_tail;
+    case QACC_REG_CQ_BASE_LO:
+        return (uint32_t)q->cq_base;
+    case QACC_REG_CQ_BASE_HI:
+        return (uint32_t)(q->cq_base >> 32);
+    case QACC_REG_CQ_SIZE:
+        return q->cq_size;
+    case QACC_REG_CQ_HEAD:
+        return q->cq_head;
+    case QACC_REG_CQ_TAIL:
+        return q->cq_tail;
     default:
         return 0;
     }
@@ -292,6 +413,43 @@ static void qacc_bar0_write(void *opaque, hwaddr addr, uint64_t val,
         break;
     case QACC_REG_QUEUE_VECTOR:
         q->vector = (uint32_t)val % QACC_QUEUE_COUNT;
+        break;
+    case QACC_REG_SQ_BASE_LO:
+        q->sq_base = (q->sq_base & 0xffffffff00000000ULL) | (uint32_t)val;
+        break;
+    case QACC_REG_SQ_BASE_HI:
+        q->sq_base = (q->sq_base & 0xffffffffULL) |
+                     ((uint64_t)(uint32_t)val << 32);
+        break;
+    case QACC_REG_SQ_SIZE:
+        q->sq_size = (uint32_t)val;
+        q->sq_head = 0;
+        q->sq_tail = 0;
+        break;
+    case QACC_REG_SQ_TAIL:
+        if (q->sq_size) {
+            q->sq_tail = (uint32_t)val % q->sq_size;
+        }
+        break;
+    case QACC_REG_CQ_BASE_LO:
+        q->cq_base = (q->cq_base & 0xffffffff00000000ULL) | (uint32_t)val;
+        break;
+    case QACC_REG_CQ_BASE_HI:
+        q->cq_base = (q->cq_base & 0xffffffffULL) |
+                     ((uint64_t)(uint32_t)val << 32);
+        break;
+    case QACC_REG_CQ_SIZE:
+        q->cq_size = (uint32_t)val;
+        q->cq_head = 0;
+        q->cq_tail = 0;
+        break;
+    case QACC_REG_CQ_HEAD:
+        if (q->cq_size) {
+            q->cq_head = (uint32_t)val % q->cq_size;
+        }
+        break;
+    case QACC_REG_DOORBELL:
+        qacc_process_queue(s, (uint32_t)val);
         break;
     }
 }

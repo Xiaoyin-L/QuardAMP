@@ -49,6 +49,16 @@
 #define QACC_REG_QUEUE_DOMAIN 0x54
 #define QACC_REG_QUEUE_VECTOR 0x58
 #define QACC_REG_QUEUE_COUNT 0x5c
+#define QACC_REG_SQ_BASE_LO  0x60
+#define QACC_REG_SQ_BASE_HI  0x64
+#define QACC_REG_SQ_SIZE     0x68
+#define QACC_REG_SQ_TAIL     0x6c
+#define QACC_REG_CQ_BASE_LO  0x70
+#define QACC_REG_CQ_BASE_HI  0x74
+#define QACC_REG_CQ_SIZE     0x78
+#define QACC_REG_CQ_HEAD     0x7c
+#define QACC_REG_DOORBELL    0x80
+#define QACC_REG_CQ_TAIL     0x84
 
 #define QACC_MAGIC          0x51414343U
 #define QACC_STATUS_DONE    0x1U
@@ -71,6 +81,24 @@
 #define QACC_VECTOR0        0
 #define QACC_VECTOR1        1
 #define QACC_MSIX_TABLE_ENTRY_SIZE 16
+#define QACC_RING_SIZE      8
+
+struct qacc_desc {
+  uint64 src_iova;
+  uint64 dst_iova;
+  uint32 len;
+  uint16 opcode;
+  uint16 flags;
+  uint32 job_id;
+  uint32 reserved;
+};
+
+struct qacc_cqe {
+  uint32 job_id;
+  int status;
+  uint32 len;
+  uint32 flags;
+};
 
 struct qacc_state {
   int present;
@@ -85,10 +113,14 @@ struct qacc_state {
   struct spinlock lock;
   struct dma_buf src_dma;
   struct dma_buf dst_dma;
+  struct dma_buf sq_dma;
+  struct dma_buf cq_dma;
   uint64 src_iova;
   uint64 dst_iova;
   uint64 iova_base;
   uint64 iova_size;
+  uint32 sq_tail;
+  uint32 cq_head;
 };
 
 static struct qacc_state qacc;
@@ -270,6 +302,22 @@ qacc_program_queue(uint32 queue, uint32 domain, uint32 vector)
 }
 
 static void
+qacc_program_rings(void)
+{
+  qacc.sq_tail = 0;
+  qacc.cq_head = 0;
+  qacc_select_queue(QACC_QUEUE0);
+  *qacc_reg(QACC_REG_SQ_BASE_LO) = (uint32)qacc.sq_dma.pa;
+  *qacc_reg(QACC_REG_SQ_BASE_HI) = (uint32)(qacc.sq_dma.pa >> 32);
+  *qacc_reg(QACC_REG_SQ_SIZE) = QACC_RING_SIZE;
+  *qacc_reg(QACC_REG_CQ_BASE_LO) = (uint32)qacc.cq_dma.pa;
+  *qacc_reg(QACC_REG_CQ_BASE_HI) = (uint32)(qacc.cq_dma.pa >> 32);
+  *qacc_reg(QACC_REG_CQ_SIZE) = QACC_RING_SIZE;
+  *qacc_reg(QACC_REG_CQ_HEAD) = 0;
+  __sync_synchronize();
+}
+
+static void
 qacc_program_iommu(void)
 {
   qacc.iova_base = QACC_IOVA_BASE;
@@ -308,7 +356,11 @@ pcie_accel_init(void)
   }
 
   if(dma_alloc(&qacc.src_dma, QACC_BENCH_BUF_SIZE, DMA_CACHELINE_SIZE) < 0 ||
-     dma_alloc(&qacc.dst_dma, QACC_BENCH_BUF_SIZE, DMA_CACHELINE_SIZE) < 0){
+     dma_alloc(&qacc.dst_dma, QACC_BENCH_BUF_SIZE, DMA_CACHELINE_SIZE) < 0 ||
+     dma_alloc(&qacc.sq_dma, sizeof(struct qacc_desc) * QACC_RING_SIZE,
+               DMA_CACHELINE_SIZE) < 0 ||
+     dma_alloc(&qacc.cq_dma, sizeof(struct qacc_cqe) * QACC_RING_SIZE,
+               DMA_CACHELINE_SIZE) < 0){
     printf("pcie-accel: DMA buffer allocation failed\n");
     return;
   }
@@ -321,14 +373,15 @@ pcie_accel_init(void)
   qacc_program_iommu();
   qacc_program_queue(QACC_QUEUE0, QACC_DOMAIN_XV6, QACC_VECTOR0);
   qacc_program_queue(QACC_QUEUE1, QACC_DOMAIN_RTOS, QACC_VECTOR1);
+  qacc_program_rings();
   qacc_select_queue(QACC_QUEUE0);
 
   qacc.present = 1;
-  printf("pcie-accel: bdf=%d:%d.%d bar0=0x%lx msix_bar=0x%lx vectors=%d/%d queues=%d domains=2 dma_src=0x%lx dma_dst=0x%lx iova=[0x%lx,0x%lx)\n",
+  printf("pcie-accel: bdf=%d:%d.%d bar0=0x%lx msix_bar=0x%lx vectors=%d/%d queues=%d domains=2 dma_src=0x%lx dma_dst=0x%lx sq=0x%lx cq=0x%lx iova=[0x%lx,0x%lx)\n",
          qacc.bus, qacc.dev, qacc.func, qacc.bar0, qacc.msix_bar,
          PCIE_ACCEL_MSIX_IRQ0, PCIE_ACCEL_MSIX_IRQ1,
          *qacc_reg(QACC_REG_QUEUE_COUNT),
-         qacc.src_dma.pa, qacc.dst_dma.pa,
+         qacc.src_dma.pa, qacc.dst_dma.pa, qacc.sq_dma.pa, qacc.cq_dma.pa,
          qacc.iova_base, qacc.iova_base + qacc.iova_size);
 }
 
@@ -435,6 +488,75 @@ qacc_run_dma(uint32 queue, uint32 vector, uint64 src_iova, uint64 dst_iova,
 }
 
 static int
+qacc_submit_desc(struct accel_job *job, uint32 *irq_delta)
+{
+  struct qacc_desc *sq = (struct qacc_desc*)qacc.sq_dma.va;
+  struct qacc_cqe *cq = (struct qacc_cqe*)qacc.cq_dma.va;
+  struct qacc_desc *desc;
+  struct qacc_cqe *cqe;
+  uint32 tail;
+  uint32 base_irq;
+
+  qacc_select_queue(QACC_QUEUE0);
+  *qacc_reg(QACC_REG_IRQ_ACK) = 1U << QACC_QUEUE0;
+  *qacc_reg(QACC_REG_STATUS) = QACC_STATUS_DONE | QACC_STATUS_FAULT;
+  qacc_reset_irq_seen(QACC_VECTOR0);
+
+  acquire(&qacc.lock);
+  base_irq = qacc.irq_count;
+  release(&qacc.lock);
+
+  tail = qacc.sq_tail;
+  desc = &sq[tail];
+  memset(desc, 0, sizeof(*desc));
+  desc->src_iova = job->src_iova;
+  desc->dst_iova = job->dst_iova;
+  desc->len = job->len;
+  desc->opcode = job->opcode;
+  desc->job_id = job->job_id;
+  dma_sync_for_device(&qacc.sq_dma);
+  dma_sync_for_device(&qacc.cq_dma);
+
+  qacc.sq_tail = (tail + 1) % QACC_RING_SIZE;
+  __sync_synchronize();
+  *qacc_reg(QACC_REG_SQ_TAIL) = qacc.sq_tail;
+  *qacc_reg(QACC_REG_DOORBELL) = QACC_QUEUE0;
+  __sync_synchronize();
+
+  if(qacc_wait_irq(QACC_VECTOR0, 20) < 0){
+    acquire(&qacc.lock);
+    *irq_delta = qacc.irq_count - base_irq;
+    release(&qacc.lock);
+    return -1;
+  }
+
+  dma_sync_for_cpu(&qacc.cq_dma);
+  if(*qacc_reg(QACC_REG_CQ_TAIL) == qacc.cq_head){
+    acquire(&qacc.lock);
+    *irq_delta = qacc.irq_count - base_irq;
+    release(&qacc.lock);
+    return -1;
+  }
+
+  cqe = &cq[qacc.cq_head];
+  if(cqe->job_id != job->job_id || cqe->status != 0){
+    acquire(&qacc.lock);
+    *irq_delta = qacc.irq_count - base_irq;
+    release(&qacc.lock);
+    qacc.cq_head = (qacc.cq_head + 1) % QACC_RING_SIZE;
+    *qacc_reg(QACC_REG_CQ_HEAD) = qacc.cq_head;
+    return -1;
+  }
+
+  qacc.cq_head = (qacc.cq_head + 1) % QACC_RING_SIZE;
+  *qacc_reg(QACC_REG_CQ_HEAD) = qacc.cq_head;
+  acquire(&qacc.lock);
+  *irq_delta = qacc.irq_count - base_irq;
+  release(&qacc.lock);
+  return 0;
+}
+
+static int
 qacc_verify_dst(uint32 len)
 {
   uchar *src = (uchar*)qacc.src_dma.va;
@@ -468,7 +590,7 @@ pcie_accel_submit_job(struct amp_accel_req *req, struct amp_accel_resp *resp)
   struct accel_job job;
   uint64 t0;
   uint64 t1;
-  uint32 irq0;
+  uint32 irq_delta = 0;
 
   memset(resp, 0, sizeof(*resp));
   resp->type = SHMEM_CMD_ACCEL_COMPLETE;
@@ -504,15 +626,10 @@ pcie_accel_submit_job(struct amp_accel_req *req, struct amp_accel_resp *resp)
   dma_sync_for_device(&qacc.dst_dma);
   iommu_clear_domain_fault(QACC_DOMAIN_XV6);
 
-  acquire(&qacc.lock);
-  irq0 = qacc.irq_count;
-  release(&qacc.lock);
-
   job.state = ACCEL_JOB_RUNNING;
   resp->state = ACCEL_JOB_RUNNING;
   t0 = r_time();
-  if(qacc_run_dma(QACC_QUEUE0, QACC_VECTOR0,
-                  job.src_iova, job.dst_iova, job.len, 0) < 0){
+  if(qacc_submit_desc(&job, &irq_delta) < 0){
     if((iommu_domain_status(QACC_DOMAIN_XV6) & QACC_IOMMU_FAULT) != 0){
       job.state = ACCEL_JOB_FAULT;
       job.status = SHMEM_ACCEL_STATUS_FAULT;
@@ -542,9 +659,7 @@ out:
   resp->state = job.state;
   resp->status = job.status;
   resp->len = job.len;
-  acquire(&qacc.lock);
-  resp->irq_count = qacc.irq_count - irq0;
-  release(&qacc.lock);
+  resp->irq_count = irq_delta;
   resp->elapsed_ticks = t1 - t0;
 
   return job.status == SHMEM_ACCEL_STATUS_OK ? 0 : -1;
