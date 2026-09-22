@@ -41,44 +41,83 @@ static void vUartRxTask(void *p_arg)
 }
 
 #if QUARDAMP_ACCEL_CLIENT
+#define ACCEL_BENCH_ITERS 32U
+#define ACCEL_BENCH_LEN 128U
+#define ACCEL_BENCH_GAP_MS 100U
+#define ACCEL_BENCH_PERIOD_MS 10000U
+
+static uint64_t accel_rdtime(void)
+{
+    uint64_t value;
+
+    __asm__ volatile ("rdtime %0" : "=r" (value));
+    return value;
+}
+
+static int accel_send_job(uint32_t job_id, uint32_t len, uint32_t opcode)
+{
+    struct rpmsg_hdr *msg;
+    struct amp_accel_req req;
+
+    req.type = SHMEM_CMD_ACCEL_SUBMIT;
+    req.job_id = job_id;
+    req.opcode = opcode;
+    req.len = len;
+    req.src_offset = 0;
+    req.dst_offset = 0;
+    req.client_submit_ticks = accel_rdtime();
+
+    msg = icc_message_loan(SHMEM_EP_XV6_ACCEL);
+    if (msg == NULL) {
+        debug_log("accel client: loan failed job=%x\n",
+                  (unsigned long)job_id);
+        return -1;
+    }
+
+    icc_prepare_app_message(msg, SHMEM_EP_RTOS_ACCEL,
+                            SHMEM_EP_XV6_ACCEL,
+                            SHMEM_CMD_ACCEL_SUBMIT,
+                            job_id, 0,
+                            (const char *)&req,
+                            sizeof(req));
+    if (icc_message_send(msg) != 0) {
+        debug_log("accel client: send failed job=%x\n",
+                  (unsigned long)job_id);
+        return -1;
+    }
+
+    debug_log("accel client: submit job=%x len=%d\n",
+              (unsigned long)job_id, (int)req.len);
+    return 0;
+}
+
 static void vAccelClientTask(void *p_arg)
 {
     uint32_t job_id = 1;
 
     vTaskDelay(pdMS_TO_TICKS(7000));
     for (;;) {
-        struct rpmsg_hdr *msg;
-        struct amp_accel_req req;
+        icc_accel_bench_reset();
+        debug_log("accel bench: start iters=%d len=%d\n",
+                  (int)ACCEL_BENCH_ITERS, (int)ACCEL_BENCH_LEN);
 
-        req.type = SHMEM_CMD_ACCEL_SUBMIT;
-        req.job_id = job_id;
-        req.opcode = SHMEM_ACCEL_OP_XOR;
-        req.len = 128U;
-        req.src_offset = 0;
-        req.dst_offset = 0;
-
-        msg = icc_message_loan(SHMEM_EP_XV6_ACCEL);
-        if (msg == NULL) {
-            debug_log("accel client: loan failed job=%x\n",
-                      (unsigned long)job_id);
-        } else {
-            icc_prepare_app_message(msg, SHMEM_EP_RTOS_ACCEL,
-                                    SHMEM_EP_XV6_ACCEL,
-                                    SHMEM_CMD_ACCEL_SUBMIT,
-                                    job_id, 0,
-                                    (const char *)&req,
-                                    sizeof(req));
-            if (icc_message_send(msg) == 0) {
-                debug_log("accel client: submit job=%x len=%d\n",
-                          (unsigned long)job_id, (int)req.len);
+        for (uint32_t i = 0; i < ACCEL_BENCH_ITERS; i++) {
+            if (accel_send_job(job_id, ACCEL_BENCH_LEN,
+                               SHMEM_ACCEL_OP_XOR) == 0) {
                 job_id++;
-            } else {
-                debug_log("accel client: send failed job=%x\n",
-                          (unsigned long)job_id);
             }
+
+            vTaskDelay(pdMS_TO_TICKS(ACCEL_BENCH_GAP_MS));
         }
 
-        vTaskDelay(pdMS_TO_TICKS(5000));
+        vTaskDelay(pdMS_TO_TICKS(500U));
+        debug_log("accel bench: fault probe job=%x\n",
+                  (unsigned long)job_id);
+        if (accel_send_job(job_id, 0U, SHMEM_ACCEL_OP_XOR) == 0) {
+            job_id++;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(ACCEL_BENCH_PERIOD_MS));
     }
 }
 #endif

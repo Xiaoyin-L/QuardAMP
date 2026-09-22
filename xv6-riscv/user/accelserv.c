@@ -18,6 +18,7 @@ main(int argc, char **argv)
   printf("accelserv: listening ep=%x\n", SHMEM_EP_XV6_ACCEL);
   for(;;){
     int n = iccrecvmsg(SHMEM_EP_XV6_ACCEL, &msg, 0);
+    uint64 service_rx_ticks = rdtime();
 
     if(n < 0)
       continue;
@@ -32,8 +33,11 @@ main(int argc, char **argv)
        msg.len == sizeof(struct amp_accel_req)){
       memmove(&req, msg.payload, sizeof(req));
       pcieacceljob(&req, &resp);
+      resp.client_submit_ticks = req.client_submit_ticks;
     }
 
+    resp.service_rx_ticks = service_rx_ticks;
+    resp.service_reply_ticks = rdtime();
     reply_cmd = resp.status == SHMEM_ACCEL_STATUS_OK ?
                 SHMEM_CMD_ACCEL_COMPLETE : SHMEM_CMD_ACCEL_ERROR;
     if(iccsend(msg.src_ep, reply_cmd, (char*)&resp, sizeof(resp),
@@ -41,9 +45,11 @@ main(int argc, char **argv)
       printf("accelserv: reply failed job=%d status=%d\n",
              resp.job_id, resp.status);
     } else {
-      printf("accelserv: job=%d len=%d state=%d status=%d ticks=%ld irq=%d\n",
+      printf("accelserv: job=%d len=%d state=%d status=%d accel_ticks=%ld service_ticks=%ld irq=%d\n",
              resp.job_id, resp.len, resp.state, resp.status,
-             resp.elapsed_ticks, resp.irq_count);
+             resp.elapsed_ticks,
+             resp.service_reply_ticks - resp.service_rx_ticks,
+             resp.irq_count);
     }
   }
 }

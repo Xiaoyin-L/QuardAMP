@@ -598,6 +598,7 @@ pcie_accel_submit_job(struct amp_accel_req *req, struct amp_accel_resp *resp)
   resp->state = ACCEL_JOB_NEW;
   resp->status = SHMEM_ACCEL_STATUS_INVAL;
   resp->len = req->len;
+  resp->client_submit_ticks = req->client_submit_ticks;
 
   if(!qacc.present){
     resp->status = SHMEM_ACCEL_STATUS_NO_DEVICE;

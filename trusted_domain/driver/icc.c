@@ -37,6 +37,18 @@ static uint16_t icc_to_xv6_free_count;
 #define icc_trace(...) do { } while (0)
 #endif
 
+#define ACCEL_BENCH_ITERS 32U
+#define TIMEBASE_HZ 10000000ULL
+
+static uint64_t accel_rtt_samples[ACCEL_BENCH_ITERS];
+static uint64_t accel_req_samples[ACCEL_BENCH_ITERS];
+static uint64_t accel_service_samples[ACCEL_BENCH_ITERS];
+static uint64_t accel_dma_samples[ACCEL_BENCH_ITERS];
+static uint64_t accel_bench_first_submit;
+static uint64_t accel_bench_last_done;
+static uint32_t accel_bench_count;
+static uint32_t accel_bench_errors;
+
 static inline void icc_fence(void)
 {
     __asm__ volatile ("fence rw, rw" ::: "memory");
@@ -48,6 +60,52 @@ static inline uint64_t icc_rdtime(void)
 
     __asm__ volatile ("rdtime %0" : "=r" (value));
     return value;
+}
+
+static uint32_t ticks_to_us32(uint64_t ticks)
+{
+    return (uint32_t)((ticks * 1000000ULL) / TIMEBASE_HZ);
+}
+
+static void sort_u64(uint64_t *v, uint32_t n)
+{
+    for (uint32_t i = 1; i < n; i++) {
+        uint64_t x = v[i];
+        int j = (int)i - 1;
+
+        while (j >= 0 && v[j] > x) {
+            v[j + 1] = v[j];
+            j--;
+        }
+        v[j + 1] = x;
+    }
+}
+
+static void print_u64_stats(const char *name, uint64_t *v, uint32_t n)
+{
+    uint64_t sum = 0;
+
+    sort_u64(v, n);
+    for (uint32_t i = 0; i < n; i++) {
+        sum += v[i];
+    }
+
+    debug_log("  %s: min=%dus max=%dus avg=%dus p50=%dus p99=%dus jitter=%dus\n",
+              name,
+              (int)ticks_to_us32(v[0]),
+              (int)ticks_to_us32(v[n - 1]),
+              (int)ticks_to_us32(sum / n),
+              (int)ticks_to_us32(v[n / 2]),
+              (int)ticks_to_us32(v[(n * 99U) / 100U]),
+              (int)ticks_to_us32(v[n - 1] - v[0]));
+}
+
+void icc_accel_bench_reset(void)
+{
+    accel_bench_first_submit = 0;
+    accel_bench_last_done = 0;
+    accel_bench_count = 0;
+    accel_bench_errors = 0;
 }
 
 static unsigned int payload_len(const char *s)
@@ -647,6 +705,11 @@ void icc_bench_handler(struct icc_msg *msg)
 void icc_accel_complete_handler(struct icc_msg *msg)
 {
     struct amp_accel_resp resp;
+    uint64_t t_done = icc_rdtime();
+    uint64_t request_ticks = 0;
+    uint64_t service_ticks = 0;
+    uint64_t rtt_ticks = 0;
+    uint32_t idx;
 
     if (msg->len != sizeof(resp)) {
         debug_log("accel client: bad response len=%d cmd=%x cookie=%x\n",
@@ -659,12 +722,65 @@ void icc_accel_complete_handler(struct icc_msg *msg)
         ((uint8_t *)&resp)[i] = (uint8_t)msg->payload[i];
     }
 
-    debug_log("accel client: job=%x cmd=%x state=%d status=%d len=%d ticks=%x irq=%d\n",
+    if (resp.client_submit_ticks != 0 && t_done >= resp.client_submit_ticks) {
+        rtt_ticks = t_done - resp.client_submit_ticks;
+    }
+    if (resp.service_rx_ticks >= resp.client_submit_ticks) {
+        request_ticks = resp.service_rx_ticks - resp.client_submit_ticks;
+    }
+    if (resp.service_reply_ticks >= resp.service_rx_ticks) {
+        service_ticks = resp.service_reply_ticks - resp.service_rx_ticks;
+    }
+    if (accel_bench_first_submit == 0 ||
+        resp.client_submit_ticks < accel_bench_first_submit) {
+        accel_bench_first_submit = resp.client_submit_ticks;
+    }
+    accel_bench_last_done = t_done;
+
+    idx = accel_bench_count % ACCEL_BENCH_ITERS;
+    accel_rtt_samples[idx] = rtt_ticks;
+    accel_req_samples[idx] = request_ticks;
+    accel_service_samples[idx] = service_ticks;
+    accel_dma_samples[idx] = resp.elapsed_ticks;
+    accel_bench_count++;
+    if (resp.status != SHMEM_ACCEL_STATUS_OK) {
+        accel_bench_errors++;
+    }
+
+    debug_log("accel client: job=%x cmd=%x state=%d status=%d len=%d rtt=%dus req=%dus service=%dus accel=%dus irq=%d\n",
               (unsigned long)resp.job_id,
               (unsigned long)msg->cmd,
               (int)resp.state,
               (int)resp.status,
               (int)resp.len,
-              (unsigned long)resp.elapsed_ticks,
+              (int)ticks_to_us32(rtt_ticks),
+              (int)ticks_to_us32(request_ticks),
+              (int)ticks_to_us32(service_ticks),
+              (int)ticks_to_us32(resp.elapsed_ticks),
               (int)resp.irq_count);
+
+    if ((accel_bench_count % ACCEL_BENCH_ITERS) == 0U) {
+        uint64_t elapsed = accel_bench_last_done >= accel_bench_first_submit ?
+            accel_bench_last_done - accel_bench_first_submit : 0;
+        uint64_t bytes = (uint64_t)resp.len * ACCEL_BENCH_ITERS;
+        uint64_t jobs_per_sec = elapsed != 0 ?
+            ((uint64_t)ACCEL_BENCH_ITERS * TIMEBASE_HZ) / elapsed : 0;
+        uint64_t bytes_per_sec = elapsed != 0 ?
+            (bytes * TIMEBASE_HZ) / elapsed : 0;
+
+        debug_log("accel bench: samples=%d errors=%d len=%d throughput=%d jobs/s %d B/s\n",
+                  (int)ACCEL_BENCH_ITERS,
+                  (int)accel_bench_errors,
+                  (int)resp.len,
+                  (int)jobs_per_sec,
+                  (int)bytes_per_sec);
+        print_u64_stats("round_trip", accel_rtt_samples, ACCEL_BENCH_ITERS);
+        print_u64_stats("request_to_service", accel_req_samples,
+                        ACCEL_BENCH_ITERS);
+        print_u64_stats("xv6_service", accel_service_samples,
+                        ACCEL_BENCH_ITERS);
+        print_u64_stats("pcie_dma_msix", accel_dma_samples,
+                        ACCEL_BENCH_ITERS);
+        accel_bench_errors = 0;
+    }
 }

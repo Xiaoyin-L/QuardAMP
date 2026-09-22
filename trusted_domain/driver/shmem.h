@@ -63,6 +63,7 @@ struct amp_accel_req {
     uint32_t len;
     uint64_t src_offset;
     uint64_t dst_offset;
+    uint64_t client_submit_ticks;
 } __attribute__((packed));
 
 struct amp_accel_resp {
@@ -73,6 +74,9 @@ struct amp_accel_resp {
     uint32_t len;
     uint32_t irq_count;
     uint64_t elapsed_ticks;
+    uint64_t client_submit_ticks;
+    uint64_t service_rx_ticks;
+    uint64_t service_reply_ticks;
 } __attribute__((packed));
 
 #define RPMSG_HDR_SIZE     16U

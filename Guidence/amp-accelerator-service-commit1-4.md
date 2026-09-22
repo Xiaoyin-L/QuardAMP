@@ -1,6 +1,6 @@
-# AMP Accelerator Service：Commit 1/2/3 实现记录
+# AMP Accelerator Service：Commit 1/2/3/4 实现记录
 
-本文记录本轮将旧 AMP ICC 通道接入 PCIe Accelerator，并升级为 SQ/CQ + doorbell 提交接口的实现过程。它对应原始建议中“四个 commit 开发顺序”的前三个 commit，而不是现有 `pcie-accelerator-stage1.md` 到 `pcie-accelerator-stage5.md` 里的某个已编号 PCIe 阶段。
+本文记录本轮将旧 AMP ICC 通道接入 PCIe Accelerator，并升级为 SQ/CQ + doorbell 提交接口和端到端 benchmark 的实现过程。它对应原始建议中“四个 commit 开发顺序”的四个 commit，而不是现有 `pcie-accelerator-stage1.md` 到 `pcie-accelerator-stage5.md` 里的某个已编号 PCIe 阶段。
 
 目标不是删除旧跨核通信，而是把它降级为 xv6 与 FreeRTOS 之间的控制面，让 FreeRTOS 通过轻量消息提交 accelerator job，xv6 继续作为 PCIe owner 负责 DMA、IOMMU、MSI-X 与错误处理。
 
@@ -40,15 +40,19 @@ Commit 4 - 端到端 benchmark
     已完成：xv6 accelerator service 路径改用 SQ/CQ 提交
     已完成：旧 SRC/DST/LEN/CMD 同步 MMIO 路径保留为 selftest/benchmark regression baseline
 
-[ ] Commit 4 - 端到端 benchmark
-    未开始，仅有本轮冒烟日志
+[x] Commit 4 - 端到端 benchmark
+    已完成：RTOS request latency
+    已完成：xv6 service / PCIe DMA+MSI-X latency
+    已完成：round-trip latency
+    已完成：throughput
+    已完成：deadline jitter
+    已完成：fault/error probe
 ```
 
 因此更准确的结论是：
 
 ```text
-当前完成了 Commit 1、Commit 2、Commit 3；
-Commit 4 尚未完成。
+当前完成了 Commit 1、Commit 2、Commit 3、Commit 4。
 ```
 
 ## 当前阶段定位
@@ -86,12 +90,13 @@ AMP Accelerator Service 集成阶段
 [x] Submission Queue / Completion Queue
 [x] BAR doorbell 驱动 descriptor ring
 [x] job_id 贯穿 RTOS request、xv6 service、PCIe CQE、RTOS complete
+[x] 端到端 benchmark 系统化
+[x] fault/error probe
 [ ] queue1 交给 FreeRTOS 直接驱动
-[ ] 端到端 benchmark 系统化
-[ ] IOMMU fault/recovery 的跨核错误路径细化
+[ ] IOMMU fault/recovery 的跨核错误路径进一步细化
 ```
 
-所以这次不是完成四个 commit 的全部规划，也不是完成一个正式编号的 `pcie-accelerator-stage6.md`。当前完成的是：
+所以这次已经完成原始四个 commit 的主线规划，但仍不是一个正式编号的 `pcie-accelerator-stage6.md`。当前完成的是：
 
 ```text
 PCIe 阶段五之后的 AMP Accelerator Service + SQ/CQ 提交闭环
@@ -103,19 +108,19 @@ PCIe 阶段五之后的 AMP Accelerator Service + SQ/CQ 提交闭环
 Commit 1 - IPC cleanup + accelerator protocol：完成
 Commit 2 - FreeRTOS -> xv6 -> PCIe 最小闭环：完成，并通过 QEMU 冒烟
 Commit 3 - Async SQ/CQ + doorbell：完成，并通过 QEMU 冒烟
-Commit 4 - 端到端 benchmark：未开始，只做了日志级冒烟验证
+Commit 4 - 端到端 benchmark：完成，并通过 QEMU 端到端验证
 ```
 
-也就是说，原始建议中的第 1、2、3 步已经完成；第 4 步尚未开始。
+也就是说，原始建议中的第 1、2、3、4 步主线已经完成；批量提交、reset/reinit、soak test、RTOS queue1 双 domain benchmark 仍作为后续方向保留。
 
 ## 当前设计
 
 当前结构：
 
 ```text
-FreeRTOS periodic task
+FreeRTOS benchmark task
   |
-  |  ACCEL_SUBMIT { job_id, opcode, len, src_offset, dst_offset }
+  |  ACCEL_SUBMIT { job_id, opcode, len, src_offset, dst_offset, client_submit_ticks }
   |  over rpmsg/ICC + mailbox
   v
 xv6 ICC endpoint: SHMEM_EP_XV6_ACCEL
@@ -137,6 +142,7 @@ PCIe Accelerator queue0 / domain0
 xv6
   |
   |  ACCEL_COMPLETE / ACCEL_ERROR
+  |  { elapsed_ticks, client_submit_ticks, service_rx_ticks, service_reply_ticks }
   v
 FreeRTOS completion handler
 ```
@@ -156,6 +162,7 @@ struct amp_accel_req {
     uint32_t len;
     uint64_t src_offset;
     uint64_t dst_offset;
+    uint64_t client_submit_ticks;
 };
 
 struct amp_accel_resp {
@@ -166,10 +173,31 @@ struct amp_accel_resp {
     uint32_t len;
     uint32_t irq_count;
     uint64_t elapsed_ticks;
+    uint64_t client_submit_ticks;
+    uint64_t service_rx_ticks;
+    uint64_t service_reply_ticks;
 };
 ```
 
 当前 `src_offset/dst_offset` 暂时映射到 xv6 PCIe driver 内部已有 DMA bounce buffer。PCIe 设备侧已经使用 descriptor ring 提交，后续如果升级为真正共享 DMA buffer，AMP 协议层可以继续沿用这套 descriptor 语义。
+
+benchmark 字段含义：
+
+```text
+client_submit_ticks  -> FreeRTOS 发送 ACCEL_SUBMIT 前的 rdtime
+service_rx_ticks     -> xv6 accelserv 收到请求后的 rdtime
+elapsed_ticks        -> xv6 kernel pcie_accel_submit_job() 内部 PCIe DMA + MSI-X 耗时
+service_reply_ticks  -> xv6 accelserv 发送 response 前的 rdtime
+```
+
+FreeRTOS completion handler 使用这些字段统计：
+
+```text
+round_trip          = FreeRTOS completion rx - client_submit_ticks
+request_to_service  = service_rx_ticks - client_submit_ticks
+xv6_service         = service_reply_ticks - service_rx_ticks
+pcie_dma_msix       = elapsed_ticks
+```
 
 ## 主要改动
 
@@ -349,10 +377,11 @@ vAccelClientTask
 icc_accel_complete_handler
 ```
 
-`vAccelClientTask` 周期发送：
+`vAccelClientTask` 周期运行一组端到端 benchmark：
 
 ```text
-ACCEL_SUBMIT job=1,2,... len=128 opcode=XOR
+32 x ACCEL_SUBMIT len=128 opcode=XOR
+1 x fault probe len=0 opcode=XOR
 ```
 
 `icc_accel_complete_handler()` 接收并打印：
@@ -363,8 +392,29 @@ cmd
 state
 status
 len
-elapsed_ticks
+round_trip latency
+request_to_service latency
+xv6_service latency
+pcie_dma_msix latency
 irq_count
+```
+
+每 32 个有效样本输出一组统计：
+
+```text
+throughput
+round_trip min/max/avg/p50/p99/jitter
+request_to_service min/max/avg/p50/p99/jitter
+xv6_service min/max/avg/p50/p99/jitter
+pcie_dma_msix min/max/avg/p50/p99/jitter
+```
+
+fault probe 使用 `len=0`，预期返回：
+
+```text
+cmd=ACCEL_ERROR
+status=SHMEM_ACCEL_STATUS_INVAL
+irq=0
 ```
 
 同时 rpmsg namespace 公告增加：
@@ -556,7 +606,7 @@ ISR 里只投递事件
 
 ## 后续需要重点防范的同类问题
 
-这些问题都属于“看起来能跑，但在中断、DMA、队列或并发压力下容易变成隐蔽死锁/错包/误完成”的问题。后续 Commit 4 和继续扩展 queue/domain benchmark 时，应优先按这些方向检查。
+这些问题都属于“看起来能跑，但在中断、DMA、队列或并发压力下容易变成隐蔽死锁/错包/误完成”的问题。后续继续扩展批量提交、reset/reinit、soak test、queue/domain benchmark 时，应优先按这些方向检查。
 
 ### 1. MSI-X ISR 里不要反向发送 ICC completion
 
@@ -727,7 +777,7 @@ make -C qemu-10.2.4/build -j4
 make CROSS_COMPILE=riscv64-linux-gnu-   # in trusted_domain
 ```
 
-重新合成 `output/fw/fw.bin` 后，QEMU 冒烟运行 65 秒。
+重新合成 `output/fw/fw.bin` 后，QEMU 冒烟运行 95 秒。
 
 xv6 UART0 日志关键输出：
 
@@ -735,48 +785,50 @@ xv6 UART0 日志关键输出：
 pcie-accel: ... dma_src=0x89f00000 dma_dst=0x89f01000 sq=0x89f02000 cq=0x89f02100 iova=[0x10000000,0x10004000)
 accelserv: listening ep=110
 rpmsg ns: quardamp-accel-client addr=10400 flags=0
-accelserv: job=1 len=128 state=3 status=0 ticks=73679 irq=1
+accelserv: job=1 len=128 state=3 status=0 accel_ticks=75004 service_ticks=235622 irq=1
+...
+accelserv: job=32 len=128 state=3 status=0 accel_ticks=877 service_ticks=2465 irq=1
+accelserv: job=33 len=0 state=0 status=-1 accel_ticks=0 service_ticks=2024 irq=0
 ```
 
 FreeRTOS UART2 日志关键输出：
 
 ```text
+accel bench: start iters=32 len=128
 accel client: submit job=0x1 len=128
-accel client: job=0x1 cmd=0x601 state=3 status=0 len=128 ticks=0x11fcf irq=1
+accel client: job=0x1 cmd=0x601 state=3 status=0 len=128 rtt=69388us req=35714us service=23562us accel=7500us irq=1
+...
+accel client: job=0x20 cmd=0x601 state=3 status=0 len=128 rtt=54905us req=54522us service=246us accel=87us irq=1
+accel bench: samples=32 errors=0 len=128 throughput=1 jobs/s 246 B/s
+  round_trip: min=5834us max=90063us avg=38343us p50=40028us p99=90063us jitter=84228us
+  request_to_service: min=2777us max=82797us avg=33967us p50=34398us p99=82797us jitter=80020us
+  xv6_service: min=77us max=23562us avg=1309us p50=225us p99=23562us jitter=23484us
+  pcie_dma_msix: min=28us max=7500us avg=306us p50=68us p99=7500us jitter=7472us
+accel bench: fault probe job=0x21
+accel client: job=0x21 cmd=0x602 state=0 status=-1 len=0 rtt=14158us req=13810us service=202us accel=0us irq=0
 ```
 
 其中：
 
 ```text
 cmd=0x601  -> SHMEM_CMD_ACCEL_COMPLETE
+cmd=0x602  -> SHMEM_CMD_ACCEL_ERROR
 state=3   -> ACCEL_JOB_DONE
 status=0  -> SHMEM_ACCEL_STATUS_OK
 irq=1     -> 每个 job 收到一次 PCIe completion interrupt
+len=0/status=-1/irq=0 -> 协议错误路径没有触发 PCIe DMA/MSI-X
 ```
 
-说明当前 SQ/CQ + doorbell 提交闭环已经跑通。
+说明当前 SQ/CQ + doorbell 提交闭环和端到端 benchmark 已经跑通。`throughput` 数值受当前 100ms pacing 和 QEMU TCG 调度影响，不代表裸 PCIe 带宽；裸 PCIe/IOMMU regression baseline 仍由 `pciebench` 覆盖。
 
 ## 后续计划
 
-下一阶段应继续做 Commit 4：
-
-系统化 benchmark：
-
-```text
-RTOS request latency
-PCIe submit latency
-DMA throughput
-MSI-X completion latency
-round-trip latency
-deadline jitter
-fault/recovery latency
-```
-
-同时保留更后续方向：
+四个 commit 主线已经完成。后续保留方向：
 
 ```text
 批量提交
 reset/reinit
 soak test
 RTOS queue1 双 domain benchmark
+IOMMU fault/recovery 的跨核错误路径进一步细化
 ```

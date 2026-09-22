@@ -37,5 +37,6 @@ void icc_echo_handler(struct icc_msg *msg);
 void icc_upper_handler(struct icc_msg *msg);
 void icc_bench_handler(struct icc_msg *msg);
 void icc_accel_complete_handler(struct icc_msg *msg);
+void icc_accel_bench_reset(void);
 
 #endif /* ICC_H */
